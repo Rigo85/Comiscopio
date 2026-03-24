@@ -35,6 +35,10 @@ export class ElectronService {
     return (await this.api.invoke(IpcChannels.OPEN_FILE_DIALOG)) as string | null;
   }
 
+  async openFolderDialog(): Promise<string | null> {
+    return (await this.api.invoke(IpcChannels.OPEN_FOLDER_DIALOG)) as string | null;
+  }
+
   async openFile(filePath: string): Promise<FileInfo> {
     return (await this.api.invoke(IpcChannels.OPEN_FILE, filePath)) as FileInfo;
   }

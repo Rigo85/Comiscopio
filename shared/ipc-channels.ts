@@ -5,6 +5,7 @@
 export const IpcChannels = {
   // File operations
   OPEN_FILE_DIALOG: 'open-file-dialog',
+  OPEN_FOLDER_DIALOG: 'open-folder-dialog',
   FILE_OPENED: 'file-opened',
   OPEN_FILE: 'open-file',
 

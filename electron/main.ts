@@ -49,14 +49,27 @@ async function initialize(): Promise<void> {
 }
 
 function setupIpcHandlers(): void {
-  // Open file dialog (supports files and folders)
+  // Open file dialog
   ipcMain.handle(IpcChannels.OPEN_FILE_DIALOG, async (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win) return null;
 
     const result = await dialog.showOpenDialog(win, {
       filters: FILE_FILTERS,
-      properties: ['openFile', 'openDirectory'],
+      properties: ['openFile'],
+    });
+
+    if (result.canceled || result.filePaths.length === 0) return null;
+    return result.filePaths[0];
+  });
+
+  // Open folder dialog (separate — Linux doesn't support openFile+openDirectory together)
+  ipcMain.handle(IpcChannels.OPEN_FOLDER_DIALOG, async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win) return null;
+
+    const result = await dialog.showOpenDialog(win, {
+      properties: ['openDirectory'],
     });
 
     if (result.canceled || result.filePaths.length === 0) return null;
@@ -188,10 +201,24 @@ app.whenReady().then(async () => {
   const win = windowManager.createWindow();
 
   if (cliFilePath) {
-    // Wait for window to load, then tell renderer to open the file
-    win.webContents.once('did-finish-load', () => {
+    // Wait for renderer to signal it's ready, with did-finish-load as fallback
+    const sendFile = () => {
       win.webContents.send(IpcChannels.FILE_OPENED, cliFilePath);
-    });
+    };
+
+    // The renderer will invoke GET_SETTINGS on init — use that as "ready" signal
+    // Also set a fallback timer in case the renderer loads from cache
+    let sent = false;
+    const sendOnce = () => {
+      if (sent) return;
+      sent = true;
+      // Small delay to ensure Angular component is mounted
+      setTimeout(sendFile, 500);
+    };
+
+    win.webContents.once('did-finish-load', sendOnce);
+    // Extra fallback
+    setTimeout(sendOnce, 3000);
   }
 
   app.on('activate', () => {

@@ -97,6 +97,10 @@ export class WindowManager {
 
     win.once('ready-to-show', () => {
       win.show();
+      // Open DevTools in dev mode
+      if (!require('electron').app.isPackaged) {
+        win.webContents.openDevTools({ mode: 'detach' });
+      }
     });
 
     win.loadURL(this.rendererUrl);

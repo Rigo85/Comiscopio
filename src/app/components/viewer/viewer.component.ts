@@ -507,6 +507,12 @@ export class ViewerComponent implements OnInit, OnDestroy {
     }
 
     // Map context menu types to keybinding action names
+    // open-folder needs special handling
+    if (action.type === 'open-folder') {
+      this.openFolderDialog();
+      return;
+    }
+
     const actionMap: Record<string, string> = {
       'open-file': 'open-file',
       'new-window': 'new-window',
@@ -738,6 +744,11 @@ export class ViewerComponent implements OnInit, OnDestroy {
   async openFileDialog(): Promise<void> {
     const filePath = await this.electron.openFileDialog();
     if (filePath) { await this.openFile(filePath); }
+  }
+
+  async openFolderDialog(): Promise<void> {
+    const folderPath = await this.electron.openFolderDialog();
+    if (folderPath) { await this.openFile(folderPath); }
   }
 
   async openFile(filePath: string): Promise<void> {

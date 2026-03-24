@@ -3,6 +3,7 @@ import { IpcChannels } from '../shared/ipc-channels';
 
 const validInvokeChannels = new Set([
   IpcChannels.OPEN_FILE_DIALOG,
+  IpcChannels.OPEN_FOLDER_DIALOG,
   IpcChannels.OPEN_FILE,
   IpcChannels.REQUEST_PAGE,
   IpcChannels.SAVE_PROGRESS,

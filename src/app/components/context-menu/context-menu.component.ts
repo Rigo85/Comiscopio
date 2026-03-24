@@ -16,7 +16,8 @@ export interface ContextMenuAction {
     | 'new-window'
     | 'zen-mode'
     | 'add-bookmark'
-    | 'goto-bookmark';
+    | 'goto-bookmark'
+    | 'open-folder';
   value?: any;
 }
 
@@ -169,6 +170,7 @@ export class ContextMenuComponent {
     const items: MenuEntry[] = [];
 
     items.push({ label: 'Abrir archivo...', action: { type: 'open-file' } });
+    items.push({ label: 'Abrir carpeta...', action: { type: 'open-folder' } });
     items.push({ label: 'Nueva ventana', action: { type: 'new-window' } });
 
     if (this.hasFile()) {
