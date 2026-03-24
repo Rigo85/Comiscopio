@@ -29,10 +29,12 @@
     "@angular/forms": "^21.2.0",
     "@angular/platform-browser": "^21.2.0",
     "@angular/router": "^21.2.0",
+    "7zip-bin": "^5.2.0",
     "adm-zip": "^0.5.16",
     "better-sqlite3": "^12.8.0",
     "image-size": "^2.0.2",
     "node-7z": "^3.0.0",
+    "node-unrar-js": "^2.0.2",
     "pdfjs-dist": "^5.5.207",
     "rxjs": "~7.8.0",
     "tslib": "^2.3.0"
@@ -72,7 +74,11 @@
     },
     "fileAssociations": [
       {
-        "ext": ["cbz", "cbr", "cb7"],
+        "ext": [
+          "cbz",
+          "cbr",
+          "cb7"
+        ],
         "name": "Comic Archive",
         "description": "Comic/Manga archive",
         "mimeType": "application/x-cbz",
@@ -87,8 +93,18 @@
     ],
     "linux": {
       "target": [
-        { "target": "AppImage", "arch": ["x64"] },
-        { "target": "tar.gz", "arch": ["x64"] }
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "tar.gz",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "category": "Graphics",
       "icon": "resources/icon.png",
@@ -101,14 +117,26 @@
     },
     "win": {
       "target": [
-        { "target": "portable", "arch": ["x64"] },
-        { "target": "zip", "arch": ["x64"] }
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "icon": "resources/icon.png"
     },
     "asar": true,
     "asarUnpack": [
-      "node_modules/better-sqlite3/**"
+      "node_modules/better-sqlite3/**",
+      "node_modules/7zip-bin/**",
+      "node_modules/node-unrar-js/**"
     ]
   }
 }

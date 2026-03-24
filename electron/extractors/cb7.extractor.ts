@@ -3,7 +3,7 @@ import { SystemExtractor } from './system.extractor';
 
 /**
  * CB7/7z extractor with fallback chain:
- * 1. node-7z (uses system 7z binary)
+ * 1. node-7z + bundled 7za (7zip-bin — portable)
  * 2. system `7z` command directly
  * 3. Error with descriptive message
  */
