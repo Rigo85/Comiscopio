@@ -44,3 +44,8 @@ __screenshots__/
 # System files
 .DS_Store
 Thumbs.db
+
+# Project-local docs (not for repo)
+CLAUDE.md
+checklist.md
+FEATURES_RESEARCH.md
