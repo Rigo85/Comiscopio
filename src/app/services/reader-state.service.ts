@@ -8,7 +8,7 @@ import type { ReadingMode, FitMode, PageLayout, AppSettings } from '../../../sha
 @Injectable({ providedIn: 'root' })
 export class ReaderStateService {
   readingMode = signal<ReadingMode>('ltr');
-  fitMode = signal<FitMode>('fit-width');
+  fitMode = signal<FitMode>('fit-page');
   pageLayout = signal<PageLayout>('single');
 
   /** Whether navigation direction is reversed (RTL) */

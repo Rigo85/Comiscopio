@@ -45,5 +45,8 @@ export function getTempDir(): string {
 /** App name */
 export const APP_NAME = 'Comiscopio';
 
+/** Custom protocol used to serve generated thumbnails to the renderer */
+export const THUMBNAIL_PROTOCOL_SCHEME = 'comiscopio-thumb';
+
 /** App version — synced from package.json at build time */
 export const APP_VERSION = '0.1.0';

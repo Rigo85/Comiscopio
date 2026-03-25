@@ -91,6 +91,11 @@ export class WindowManager {
       });
     });
 
+    // Prevent Electron from navigating when files are dropped
+    win.webContents.on('will-navigate', (event) => {
+      event.preventDefault();
+    });
+
     win.on('closed', () => {
       this.windows.delete(win);
     });
@@ -120,18 +125,23 @@ export class WindowManager {
     return Array.from(this.windows.keys());
   }
 
-  private getInitialBounds(): { x?: number; y?: number; width: number; height: number; isMaximized: boolean } {
+  private getInitialBounds(): { x: number; y: number; width: number; height: number; isMaximized: boolean } {
+    // If we have saved bounds on a visible display, use them
     if (this.lastBounds && this.isBoundsVisible(this.lastBounds)) {
       return this.lastBounds;
     }
 
-    // Offset new windows so they don't stack exactly
-    const offset = this.windows.size * 30;
+    // No saved config — center on primary display
+    const monitor = screen.getPrimaryDisplay();
+    const { x, y, width, height } = monitor.bounds;
+    const winWidth = 1024;
+    const winHeight = 768;
+
     return {
-      width: 1024,
-      height: 768,
-      x: undefined,
-      y: undefined,
+      width: winWidth,
+      height: winHeight,
+      x: x + Math.trunc(width / 2) - Math.trunc(winWidth / 2),
+      y: y + Math.trunc(height / 2) - Math.trunc(winHeight / 2),
       isMaximized: false,
     };
   }

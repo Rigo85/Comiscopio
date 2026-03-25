@@ -19,14 +19,20 @@ interface OpenedFile {
   pageFiles: string[];
 }
 
+export interface FileDescriptor {
+  filePath: string;
+  fileName: string;
+  fileHash: string;
+  format: ArchiveFormat;
+  isDirectory: boolean;
+}
+
 export class FileHandler {
   private openedFiles = new Map<string, OpenedFile>();
 
   constructor(private tempManager: TempManager) {}
 
-  /** Open a comic file: detect format, extract, index pages */
-  async openFile(filePath: string): Promise<FileInfo> {
-    // Resolve to absolute path
+  describeFile(filePath: string): FileDescriptor {
     filePath = path.resolve(filePath);
 
     if (!fs.existsSync(filePath)) {
@@ -35,13 +41,43 @@ export class FileHandler {
 
     const stat = fs.statSync(filePath);
     const isDirectory = stat.isDirectory();
-
     const format = isDirectory ? 'folder' as ArchiveFormat : this.detectFormat(filePath);
     if (!format) {
       throw new Error(`Formato no soportado: ${path.extname(filePath)}`);
     }
 
-    const fileHash = this.computeHash(filePath, stat);
+    return {
+      filePath,
+      fileName: path.basename(filePath),
+      fileHash: this.computeHash(filePath, stat),
+      format,
+      isDirectory,
+    };
+  }
+
+  createTempDir(fileHash: string): string {
+    return this.tempManager.create(fileHash);
+  }
+
+  registerOpenedFile(info: FileInfo, tempDir: string, pageFiles: string[]): void {
+    this.openedFiles.set(info.fileHash, { info, tempDir, pageFiles });
+  }
+
+  getOpenedFile(fileHash: string): OpenedFile | null {
+    return this.openedFiles.get(fileHash) ?? null;
+  }
+
+  getPagePath(fileHash: string, pageIndex: number): string | null {
+    const opened = this.openedFiles.get(fileHash);
+    if (!opened) return null;
+    if (pageIndex < 0 || pageIndex >= opened.pageFiles.length) return null;
+    return opened.pageFiles[pageIndex] ?? null;
+  }
+
+  /** Open a comic file: detect format, extract, index pages */
+  async openFile(filePath: string): Promise<FileInfo> {
+    const descriptor = this.describeFile(filePath);
+    const { filePath: resolvedPath, fileHash, format, fileName, isDirectory } = descriptor;
 
     // If already opened, return existing info
     const existing = this.openedFiles.get(fileHash);
@@ -53,27 +89,27 @@ export class FileHandler {
     const tempDir = this.tempManager.create(fileHash);
 
     try {
-      await extractor.extract(filePath, tempDir);
+      await extractor.extract(resolvedPath, tempDir);
     } catch (err: any) {
       this.tempManager.cleanup(fileHash);
-      throw new Error(`Error al extraer ${path.basename(filePath)}: ${err.message}`);
+      throw new Error(`Error al extraer ${fileName}: ${err.message}`);
     }
 
-    const pageFiles = this.indexPages(isDirectory ? filePath : tempDir);
+    const pageFiles = this.indexPages(isDirectory ? resolvedPath : tempDir);
     if (pageFiles.length === 0) {
       this.tempManager.cleanup(fileHash);
       throw new Error('No se encontraron imágenes en el archivo');
     }
 
     const info: FileInfo = {
-      filePath,
+      filePath: resolvedPath,
       fileHash,
       format,
       totalPages: pageFiles.length,
-      fileName: path.basename(filePath),
+      fileName,
     };
 
-    this.openedFiles.set(fileHash, { info, tempDir, pageFiles });
+    this.registerOpenedFile(info, tempDir, pageFiles);
     return info;
   }
 
@@ -86,7 +122,7 @@ export class FileHandler {
     const imgPath = opened.pageFiles[pageIndex];
 
     const realPath = fs.realpathSync(imgPath);
-    const buffer = fs.readFileSync(realPath);
+    const buffer = await fs.promises.readFile(realPath);
     const ext = path.extname(imgPath).toLowerCase();
     const mimeType = this.getMimeType(ext);
 

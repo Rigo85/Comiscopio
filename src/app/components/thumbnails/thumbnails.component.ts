@@ -1,5 +1,5 @@
-import { Component, input, output, signal, OnInit, OnDestroy, OnChanges, SimpleChanges } from '@angular/core';
-import { PageCacheService } from '../../services/page-cache.service';
+import { Component, ElementRef, ViewChild, input, output, signal, OnChanges, OnDestroy, SimpleChanges } from '@angular/core';
+import { ThumbnailCacheService } from '../../services/thumbnail-cache.service';
 
 /**
  * Side panel with page thumbnails.
@@ -19,10 +19,11 @@ import { PageCacheService } from '../../services/page-cache.service';
             </svg>
           </button>
         </div>
-        <div class="thumbnails-list">
+        <div class="thumbnails-list" #list (scroll)="onScroll()">
           @for (i of pageIndices(); track i) {
             <button
               class="thumbnail-item"
+              [attr.data-page]="i"
               [class.active]="i === currentPage()"
               (click)="pageSelect.emit(i)"
             >
@@ -131,7 +132,7 @@ import { PageCacheService } from '../../services/page-cache.service';
     }
   `,
 })
-export class ThumbnailsComponent implements OnChanges {
+export class ThumbnailsComponent implements OnChanges, OnDestroy {
   visible = input(false);
   currentPage = input(0);
   totalPages = input(0);
@@ -142,36 +143,67 @@ export class ThumbnailsComponent implements OnChanges {
 
   pageIndices = signal<number[]>([]);
   thumbnailUrls = new Map<number, string>();
+  @ViewChild('list') listRef?: ElementRef<HTMLElement>;
+  private unsubscribeThumbnail?: () => void;
 
-  constructor(private pageCache: PageCacheService) {}
+  constructor(private thumbnailCache: ThumbnailCacheService) {
+    this.unsubscribeThumbnail = this.thumbnailCache.subscribe((pageIndex, fileUrl) => {
+      this.thumbnailUrls.set(pageIndex, fileUrl);
+    });
+  }
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['totalPages'] || changes['fileHash']) {
       this.pageIndices.set(Array.from({ length: this.totalPages() }, (_, i) => i));
       this.thumbnailUrls.clear();
+      if (this.fileHash()) {
+        this.thumbnailCache.init(this.fileHash()!, this.totalPages());
+      } else {
+        this.thumbnailCache.clear();
+      }
     }
 
-    if (changes['visible'] && this.visible()) {
-      this.loadVisibleThumbnails();
+    if (changes['visible'] || changes['currentPage']) {
+      if (this.visible()) {
+        queueMicrotask(() => {
+          this.scrollToCurrentPage();
+          this.loadVisibleThumbnails();
+        });
+      }
     }
   }
 
+  onScroll(): void {
+    void this.loadVisibleThumbnails();
+  }
+
   private async loadVisibleThumbnails(): Promise<void> {
-    // Load thumbnails for pages near current page first
-    const current = this.currentPage();
     const total = this.totalPages();
-    const batchSize = 10;
+    if (!this.visible() || total === 0) return;
 
-    const start = Math.max(0, current - batchSize / 2);
-    const end = Math.min(total, start + batchSize);
+    const list = this.listRef?.nativeElement;
+    const estimatedItemHeight = 130;
+    const scrollTop = list?.scrollTop ?? Math.max(0, this.currentPage() * estimatedItemHeight - estimatedItemHeight * 2);
+    const viewportHeight = list?.clientHeight ?? 600;
 
-    for (let i = start; i < end; i++) {
-      if (!this.thumbnailUrls.has(i)) {
-        const url = await this.pageCache.getPage(i);
-        if (url) {
-          this.thumbnailUrls.set(i, url);
-        }
-      }
+    const start = Math.max(0, Math.floor(scrollTop / estimatedItemHeight) - 4);
+    const end = Math.min(total, Math.ceil((scrollTop + viewportHeight) / estimatedItemHeight) + 6);
+
+    const immediate = await this.thumbnailCache.requestRange(start, end, this.currentPage());
+    for (const [pageIndex, fileUrl] of immediate) {
+      this.thumbnailUrls.set(pageIndex, fileUrl);
     }
+  }
+
+  private scrollToCurrentPage(): void {
+    const list = this.listRef?.nativeElement;
+    if (!list) return;
+
+    const current = list.querySelector(`[data-page="${this.currentPage()}"]`) as HTMLElement | null;
+    current?.scrollIntoView({ block: 'nearest' });
+  }
+
+  ngOnDestroy(): void {
+    this.unsubscribeThumbnail?.();
   }
 }

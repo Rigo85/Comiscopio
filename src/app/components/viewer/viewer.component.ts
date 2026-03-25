@@ -4,6 +4,7 @@ import { PageCacheService, CachedPage } from '../../services/page-cache.service'
 import { ReaderStateService } from '../../services/reader-state.service';
 import { ZoomPanService } from '../../services/zoom-pan.service';
 import { KeybindingsService } from '../../services/keybindings.service';
+import { ThumbnailCacheService } from '../../services/thumbnail-cache.service';
 import { ToolbarComponent } from '../toolbar/toolbar.component';
 import { ContextMenuComponent, ContextMenuAction } from '../context-menu/context-menu.component';
 import { ThumbnailsComponent } from '../thumbnails/thumbnails.component';
@@ -15,7 +16,12 @@ import type { FileInfo, RecentFile } from '../../../../shared/models';
   template: `
     @if (loading()) {
       <div class="viewer-overlay">
-        <div class="viewer-loading">Abriendo archivo...</div>
+        <div class="viewer-loading">
+          <p>{{ loadingMessage() }}</p>
+          @if (openingSessionId() !== null) {
+            <button class="loading-cancel" (click)="cancelOpenFile()">Cancelar</button>
+          }
+        </div>
       </div>
     }
 
@@ -170,6 +176,7 @@ import type { FileInfo, RecentFile } from '../../../../shared/models';
       [isAlwaysOnTop]="isAlwaysOnTop()"
       [isFullscreen]="isFullscreen()"
       [showThumbnails]="showThumbnails()"
+      [canLoadFullQuality]="currentPageIsDegraded()"
       (action)="onMenuAction($event)"
       #contextMenu
     />
@@ -348,7 +355,31 @@ import type { FileInfo, RecentFile } from '../../../../shared/models';
       z-index: 10;
     }
 
-    .viewer-loading { color: #aaa; font-size: 1.1rem; }
+    .viewer-loading {
+      color: #aaa;
+      font-size: 1.1rem;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+
+      p {
+        margin: 0;
+      }
+    }
+
+    .loading-cancel {
+      padding: 6px 14px;
+      background: #2f2f2f;
+      color: #ddd;
+      border: 1px solid #555;
+      border-radius: 4px;
+      cursor: pointer;
+
+      &:hover {
+        background: #3b3b3b;
+      }
+    }
 
     .viewer-error {
       text-align: center;
@@ -401,6 +432,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
   secondPageUrl = signal<string | null>(null);
   currentPageIndex = signal(0);
   loading = signal(false);
+  loadingMessage = signal('Abriendo archivo...');
   error = signal<string | null>(null);
   isDragOver = signal(false);
   showGoToPage = signal(false);
@@ -409,6 +441,8 @@ export class ViewerComponent implements OnInit, OnDestroy {
   isAlwaysOnTop = signal(false);
   isFullscreen = signal(false);
   recentFiles = signal<RecentFile[]>([]);
+  openingSessionId = signal<number | null>(null);
+  currentPageIsDegraded = signal(false);
 
   private currentPageMeta: CachedPage | null = null;
   private isPanning = false;
@@ -435,11 +469,17 @@ export class ViewerComponent implements OnInit, OnDestroy {
 
   private unsubFileOpened?: () => void;
   private unsubWindowState?: () => void;
+  private unsubOpenProgress?: () => void;
+  private unsubOpenComplete?: () => void;
+  private unsubOpenError?: () => void;
+  private unsubOpenCancelled?: () => void;
   private navigating = false;
+  private memoryStatsInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private electron: ElectronService,
     private pageCache: PageCacheService,
+    private thumbnailCache: ThumbnailCacheService,
     public readerState: ReaderStateService,
     public zoomPan: ZoomPanService,
     private keybindings: KeybindingsService,
@@ -454,6 +494,33 @@ export class ViewerComponent implements OnInit, OnDestroy {
         this.isAlwaysOnTop.set(state.isAlwaysOnTop);
         this.isFullscreen.set(state.isFullscreen);
       });
+      this.unsubOpenProgress = this.electron.onOpenFileProgress((event) => {
+        if (event.sessionId === this.openingSessionId()) {
+          this.loadingMessage.set(event.message);
+        }
+      });
+      this.unsubOpenComplete = this.electron.onOpenFileComplete((event) => {
+        if (event.sessionId === this.openingSessionId()) {
+          this.completeOpenFile(event.info);
+        }
+      });
+      this.unsubOpenError = this.electron.onOpenFileError((event) => {
+        if (event.sessionId === this.openingSessionId()) {
+          this.openingSessionId.set(null);
+          this.loading.set(false);
+          this.loadingMessage.set('Abriendo archivo...');
+          this.error.set(event.message);
+          this.fileInfo.set(null);
+        }
+      });
+      this.unsubOpenCancelled = this.electron.onOpenFileCancelled((event) => {
+        if (event.sessionId === this.openingSessionId()) {
+          this.openingSessionId.set(null);
+          this.loading.set(false);
+          this.loadingMessage.set('Abriendo archivo...');
+          this.fileInfo.set(null);
+        }
+      });
       // Get initial state
       this.electron.getWindowState().then((state) => {
         this.isAlwaysOnTop.set(state.isAlwaysOnTop);
@@ -463,6 +530,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
       // Load keybindings and recent files
       this.keybindings.load();
       this.loadRecentFiles();
+      this.startMemoryLogging();
     }
   }
 
@@ -476,7 +544,15 @@ export class ViewerComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     this.unsubFileOpened?.();
     this.unsubWindowState?.();
+    this.unsubOpenProgress?.();
+    this.unsubOpenComplete?.();
+    this.unsubOpenError?.();
+    this.unsubOpenCancelled?.();
+    this.cancelOpenFile();
     this.closeCurrentFile();
+    if (this.memoryStatsInterval) {
+      clearInterval(this.memoryStatsInterval);
+    }
   }
 
   // --- Context menu ---
@@ -523,6 +599,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
       'zen-mode': 'toggle-zen',
       'fullscreen': 'toggle-fullscreen',
       'add-bookmark': 'add-bookmark',
+      'load-full-quality': 'load-full-quality',
     };
 
     const mapped = actionMap[action.type];
@@ -662,6 +739,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
       case 'toggle-zen': this.toggleZenMode(); break;
       case 'toggle-fullscreen': this.electron.toggleFullscreen(); break;
       case 'add-bookmark': this.addBookmark(); break;
+      case 'load-full-quality': this.loadCurrentPageFullQuality(); break;
     }
   }
 
@@ -732,10 +810,17 @@ export class ViewerComponent implements OnInit, OnDestroy {
 
   onDrop(event: DragEvent): void {
     event.preventDefault(); event.stopPropagation(); this.isDragOver.set(false);
-    const files = event.dataTransfer?.files;
-    if (files && files.length > 0) {
-      const filePath = (files[0] as any).path;
-      if (filePath) { this.openFile(filePath); }
+    const filePath = this.extractDroppedPath(event);
+    if (filePath) {
+      this.openFile(filePath);
+    }
+  }
+
+  cancelOpenFile(): void {
+    const sessionId = this.openingSessionId();
+    if (sessionId !== null) {
+      this.electron.cancelOpenFile(sessionId);
+      this.loadingMessage.set('Cancelando apertura...');
     }
   }
 
@@ -752,24 +837,26 @@ export class ViewerComponent implements OnInit, OnDestroy {
   }
 
   async openFile(filePath: string): Promise<void> {
+    if (this.openingSessionId() !== null) {
+      this.cancelOpenFile();
+      return;
+    }
+
     await this.closeCurrentFile();
     this.loading.set(true);
+    this.loadingMessage.set('Preparando archivo...');
     this.error.set(null);
 
     try {
-      const info = await this.electron.openFile(filePath);
-      this.fileInfo.set(info);
-
-      const settings = await this.electron.getSettings();
-      this.readerState.applySettings(settings);
-      this.pageCache.init(info.fileHash, info.totalPages, settings.slidingWindowSize, settings.slidingWindowSize, settings.prefetchCount);
-
-      const progress = await this.electron.getProgress(info.fileHash);
-      await this.goToPage(progress ? progress.currentPage : 0);
+      const session = await this.electron.startOpenFile(filePath);
+      if (session.sessionId === 0 && session.info) {
+        await this.completeOpenFile(session.info);
+        return;
+      }
+      this.openingSessionId.set(session.sessionId);
     } catch (err: any) {
       this.error.set(err.message || 'Error al abrir el archivo');
       this.fileInfo.set(null);
-    } finally {
       this.loading.set(false);
     }
   }
@@ -809,6 +896,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
         this.currentPageUrl.set(cached.blobUrl);
         this.currentPageIndex.set(index);
         this.currentPageMeta = cached;
+        this.currentPageIsDegraded.set(cached.isDegraded);
         this.zoomPan.resetOnPageChange();
         await this.loadSecondPage(index, cached);
         this.saveProgress(info, index);
@@ -854,18 +942,106 @@ export class ViewerComponent implements OnInit, OnDestroy {
 
   private async closeCurrentFile(): Promise<void> {
     const info = this.fileInfo();
+    this.thumbnailCache.clear();
     if (info) {
       this.pageCache.clear();
       this.currentPageUrl.set(null);
       this.secondPageUrl.set(null);
       this.currentPageIndex.set(0);
       this.currentPageMeta = null;
+      this.currentPageIsDegraded.set(false);
       this.fileInfo.set(null);
       this.zoomPan.resetAll();
       this.showThumbnails.set(false);
       await this.electron.cleanupTemp(info.fileHash);
       this.loadRecentFiles();
     }
+  }
+
+  private async completeOpenFile(info: FileInfo): Promise<void> {
+    this.fileInfo.set(info);
+
+    try {
+      const settings = await this.electron.getSettings();
+      this.readerState.applySettings(settings);
+      this.pageCache.init(info.fileHash, info.totalPages, settings.slidingWindowSize, settings.slidingWindowSize, settings.prefetchCount);
+      this.thumbnailCache.init(info.fileHash, info.totalPages);
+
+      const progress = await this.electron.getProgress(info.fileHash);
+      await this.goToPage(progress ? progress.currentPage : 0);
+    } catch (err: any) {
+      this.error.set(err.message || 'Error al inicializar el archivo');
+      this.fileInfo.set(null);
+    } finally {
+      this.openingSessionId.set(null);
+      this.loading.set(false);
+      this.loadingMessage.set('Abriendo archivo...');
+    }
+  }
+
+  private async loadCurrentPageFullQuality(): Promise<void> {
+    const index = this.currentPageIndex();
+    const cached = await this.pageCache.loadFullQuality(index);
+    if (!cached) return;
+
+    this.currentPageUrl.set(cached.blobUrl);
+    this.currentPageMeta = cached;
+    this.currentPageIsDegraded.set(cached.isDegraded);
+    await this.loadSecondPage(index, cached);
+  }
+
+  private extractDroppedPath(event: DragEvent): string | null {
+    const files = event.dataTransfer?.files;
+    if (files && files.length > 0) {
+      const directPath = window.electronAPI?.getPathForFile(files[0]) || (files[0] as any).path;
+      if (typeof directPath === 'string' && directPath.length > 0) {
+        return directPath;
+      }
+    }
+
+    const items = event.dataTransfer?.items;
+    if (items && items.length > 0) {
+      const itemFile = items[0].getAsFile();
+      const itemPath = itemFile ? (window.electronAPI?.getPathForFile(itemFile) || (itemFile as any)?.path) : null;
+      if (typeof itemPath === 'string' && itemPath.length > 0) {
+        return itemPath;
+      }
+    }
+
+    const uriList = event.dataTransfer?.getData('text/uri-list') || event.dataTransfer?.getData('text/plain');
+    if (uriList) {
+      const firstLine = uriList.split('\n').find((line) => line.trim().length > 0 && !line.startsWith('#'))?.trim();
+      if (firstLine?.startsWith('file://')) {
+        try {
+          return decodeURIComponent(firstLine.replace('file://', ''));
+        } catch {
+          return firstLine.replace('file://', '');
+        }
+      }
+    }
+
+    return null;
+  }
+
+  private startMemoryLogging(): void {
+    const isDev = window.location.hostname === 'localhost';
+    if (!isDev) return;
+
+    this.memoryStatsInterval = setInterval(async () => {
+      if (!this.fileInfo()) return;
+
+      const processStats = await this.electron.getMemoryStats();
+      const rendererMemory = (performance as any).memory;
+      this.electron.logMemoryStats({
+        mainRssBytes: processStats.mainRssBytes,
+        rendererHeapUsedBytes: rendererMemory?.usedJSHeapSize ?? null,
+        rendererHeapLimitBytes: rendererMemory?.jsHeapSizeLimit ?? null,
+        pageCacheBytes: this.pageCache.stats.totalSizeBytes,
+        pageCachePages: this.pageCache.stats.cachedPages,
+        thumbnailCacheBytes: this.thumbnailCache.stats.totalSizeBytes,
+        thumbnailCacheEntries: this.thumbnailCache.stats.cachedEntries,
+      });
+    }, 5000);
   }
 
   private saveProgress(info: FileInfo, page: number): void {

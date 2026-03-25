@@ -41,7 +41,7 @@ export interface AppSettings {
 /** Default application settings */
 export const DEFAULT_SETTINGS: AppSettings = {
   readingMode: 'ltr',
-  fitMode: 'fit-width',
+  fitMode: 'fit-page',
   pageLayout: 'single',
   theme: 'dark',
   slidingWindowSize: 5,
@@ -75,4 +75,50 @@ export interface RecentFile {
   lastRead: string;
   currentPage: number;
   totalPages: number;
+}
+
+export type OpenFileStage = 'preparing' | 'extracting' | 'indexing' | 'ready';
+
+export interface OpenFileSession {
+  sessionId: number;
+  filePath: string;
+  fileName: string;
+  info?: FileInfo;
+}
+
+export interface OpenFileProgress {
+  sessionId: number;
+  stage: OpenFileStage;
+  message: string;
+}
+
+export interface OpenFileComplete {
+  sessionId: number;
+  info: FileInfo;
+}
+
+export interface OpenFileError {
+  sessionId: number;
+  message: string;
+}
+
+export interface MemoryStats {
+  mainRssBytes: number;
+  rendererHeapUsedBytes: number | null;
+  rendererHeapLimitBytes: number | null;
+  pageCacheBytes: number;
+  pageCachePages: number;
+  thumbnailCacheBytes: number;
+  thumbnailCacheEntries: number;
+}
+
+export interface ThumbnailDescriptor {
+  fileHash: string;
+  pageIndex: number;
+  fileUrl: string;
+  bytes: number;
+}
+
+export interface ThumbnailReadyEvent extends ThumbnailDescriptor {
+  generationMs: number;
 }

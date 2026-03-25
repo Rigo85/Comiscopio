@@ -8,11 +8,20 @@ export const IpcChannels = {
   OPEN_FOLDER_DIALOG: 'open-folder-dialog',
   FILE_OPENED: 'file-opened',
   OPEN_FILE: 'open-file',
+  OPEN_FILE_START: 'open-file-start',
+  OPEN_FILE_CANCEL: 'open-file-cancel',
+  OPEN_FILE_PROGRESS: 'open-file-progress',
+  OPEN_FILE_COMPLETE: 'open-file-complete',
+  OPEN_FILE_ERROR: 'open-file-error',
+  OPEN_FILE_CANCELLED: 'open-file-cancelled',
 
   // Page data
   REQUEST_PAGE: 'request-page',
   PAGE_DATA: 'page-data',
   PAGE_COUNT: 'page-count',
+  THUMBNAILS_INIT: 'thumbnails-init',
+  THUMBNAILS_REQUEST_RANGE: 'thumbnails-request-range',
+  THUMBNAIL_READY: 'thumbnail-ready',
 
   // Navigation
   NAVIGATE: 'navigate',
@@ -47,6 +56,9 @@ export const IpcChannels = {
   GET_SETTINGS: 'get-settings',
   SAVE_SETTINGS: 'save-settings',
   SETTINGS_DATA: 'settings-data',
+  GET_MEMORY_STATS: 'get-memory-stats',
+  LOG_MEMORY_STATS: 'log-memory-stats',
+  LOG_PERFORMANCE_EVENT: 'log-performance-event',
 } as const;
 
 export type IpcChannel = (typeof IpcChannels)[keyof typeof IpcChannels];

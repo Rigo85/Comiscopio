@@ -1,6 +1,11 @@
 import { Injectable } from '@angular/core';
 import { ElectronService } from './electron.service';
 
+const MAX_CACHE_BYTES = 48 * 1024 * 1024;
+const MAX_PAGE_BYTES = 8 * 1024 * 1024;
+const MAX_PAGE_DIMENSION = 4500;
+const MAX_PAGE_PIXELS = 18_000_000;
+
 export interface CachedPage {
   index: number;
   blobUrl: string;
@@ -8,6 +13,9 @@ export interface CachedPage {
   width: number;
   height: number;
   size: number; // approximate memory size in bytes
+  originalSize: number;
+  isDegraded: boolean;
+  degradeReason: string | null;
 }
 
 /**
@@ -28,6 +36,8 @@ export class PageCacheService {
   private pendingRequests = new Map<number, Promise<CachedPage | null>>();
   private currentFileHash: string | null = null;
   private totalPages = 0;
+  private currentIndex = 0;
+  private fullQualityOverrides = new Set<number>();
 
   /** Pages to keep behind current position */
   windowBehind = 3;
@@ -72,6 +82,7 @@ export class PageCacheService {
    */
   async navigateTo(index: number): Promise<CachedPage | null> {
     if (!this.currentFileHash || index < 0 || index >= this.totalPages) return null;
+    this.currentIndex = index;
 
     let cached = this.cache.get(index);
     if (!cached) {
@@ -83,6 +94,7 @@ export class PageCacheService {
 
     // Evict pages outside the window
     this.evictOutsideWindow(index);
+    this.evictToBudget(index);
 
     return cached ?? null;
   }
@@ -97,6 +109,8 @@ export class PageCacheService {
     this.currentFileHash = null;
     this.totalPages = 0;
     this._totalCacheSize = 0;
+    this.currentIndex = 0;
+    this.fullQualityOverrides.clear();
   }
 
   /** Current cache stats */
@@ -105,6 +119,16 @@ export class PageCacheService {
       cachedPages: this.cache.size,
       totalSizeBytes: this._totalCacheSize,
     };
+  }
+
+  shouldOfferFullQuality(index: number): boolean {
+    return this.cache.get(index)?.isDegraded ?? false;
+  }
+
+  async loadFullQuality(index: number): Promise<CachedPage | null> {
+    this.fullQualityOverrides.add(index);
+    this.removeFromCache(index);
+    return this.navigateTo(index);
   }
 
   // --- Private ---
@@ -130,30 +154,73 @@ export class PageCacheService {
     if (!this.currentFileHash) return null;
 
     try {
+      const totalStartedAt = performance.now();
+      const requestStartedAt = totalStartedAt;
       const pageData = await this.electron.requestPage(this.currentFileHash, index);
       if (!pageData) return null;
+      const fetchMs = performance.now() - requestStartedAt;
 
-      // Convert base64 to Blob URL (much more memory-efficient than data URIs)
+      const base64DecodeStartedAt = performance.now();
       const binary = atob(pageData.imageBase64);
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) {
         bytes[i] = binary.charCodeAt(i);
       }
+      const base64DecodeMs = performance.now() - base64DecodeStartedAt;
 
-      const blob = new Blob([bytes], { type: pageData.mimeType });
+      const originalSize = bytes.byteLength;
+      const blobStartedAt = performance.now();
+      const sourceBlob = new Blob([bytes], { type: pageData.mimeType });
+      const blobMs = performance.now() - blobStartedAt;
+      const transformStartedAt = performance.now();
+      const useFullQuality = this.fullQualityOverrides.has(index);
+      const degradeReason = !useFullQuality ? this.getDegradeReason(originalSize, pageData.width, pageData.height) : null;
+      const transformed = degradeReason
+        ? await this.createReducedBlob(sourceBlob, pageData.mimeType, pageData.width, pageData.height)
+        : null;
+      const transformMs = performance.now() - transformStartedAt;
+      const blob = transformed?.blob ?? sourceBlob;
+      const objectUrlStartedAt = performance.now();
       const blobUrl = URL.createObjectURL(blob);
+      const objectUrlMs = performance.now() - objectUrlStartedAt;
 
       const cached: CachedPage = {
         index,
         blobUrl,
-        mimeType: pageData.mimeType,
+        mimeType: transformed?.mimeType ?? pageData.mimeType,
         width: pageData.width,
         height: pageData.height,
-        size: bytes.byteLength,
+        size: blob.size,
+        originalSize,
+        isDegraded: !!transformed,
+        degradeReason,
       };
 
+      this.removeFromCache(index);
       this.cache.set(index, cached);
       this._totalCacheSize += cached.size;
+      this.evictToBudget(this.currentIndex);
+
+      if (index === this.currentIndex || cached.isDegraded) {
+        this.electron.logPerformanceEvent({
+          kind: 'page-fetch',
+          index,
+          totalMs: Math.round(performance.now() - totalStartedAt),
+          fetchMs: Math.round(fetchMs),
+          base64DecodeMs: Math.round(base64DecodeMs),
+          blobMs: Math.round(blobMs),
+          transformMs: Math.round(transformMs),
+          objectUrlMs: Math.round(objectUrlMs),
+          originalBytes: originalSize,
+          cachedBytes: cached.size,
+          width: pageData.width,
+          height: pageData.height,
+          pixels: pageData.width * pageData.height,
+          degraded: cached.isDegraded,
+          degradeReason: cached.degradeReason,
+          transformDetails: transformed?.details ?? null,
+        });
+      }
 
       return cached;
     } catch (err) {
@@ -196,5 +263,129 @@ export class PageCacheService {
     for (const idx of toEvict) {
       this.cache.delete(idx);
     }
+  }
+
+  private evictToBudget(currentIndex: number): void {
+    while (this._totalCacheSize > MAX_CACHE_BYTES && this.cache.size > 1) {
+      let candidate: CachedPage | null = null;
+
+      for (const page of this.cache.values()) {
+        if (page.index === currentIndex) continue;
+        if (!candidate) {
+          candidate = page;
+          continue;
+        }
+
+        const candidateDistance = Math.abs(candidate.index - currentIndex);
+        const pageDistance = Math.abs(page.index - currentIndex);
+        if (pageDistance > candidateDistance || (pageDistance === candidateDistance && page.size > candidate.size)) {
+          candidate = page;
+        }
+      }
+
+      if (!candidate) break;
+      this.removeFromCache(candidate.index);
+    }
+  }
+
+  private removeFromCache(index: number): void {
+    const existing = this.cache.get(index);
+    if (!existing) return;
+    URL.revokeObjectURL(existing.blobUrl);
+    this._totalCacheSize -= existing.size;
+    this.cache.delete(index);
+  }
+
+  private getDegradeReason(sizeBytes: number, width: number, height: number): string | null {
+    if (sizeBytes > MAX_PAGE_BYTES) {
+      return 'bytes';
+    }
+    if (Math.max(width, height) > MAX_PAGE_DIMENSION) {
+      return 'dimension';
+    }
+    if (width * height > MAX_PAGE_PIXELS) {
+      return 'pixels';
+    }
+    return null;
+  }
+
+  private async createReducedBlob(sourceBlob: Blob, mimeType: string, width: number, height: number): Promise<{ blob: Blob; mimeType: string; details: Record<string, number | string> } | null> {
+    const bitmapStartedAt = performance.now();
+    const bitmap = await createImageBitmap(sourceBlob);
+    const bitmapMs = performance.now() - bitmapStartedAt;
+
+    try {
+      const candidates = [
+        { maxDimension: 2400, quality: 0.82 },
+        { maxDimension: 2000, quality: 0.76 },
+        { maxDimension: 1600, quality: 0.7 },
+      ];
+
+      for (const candidate of candidates) {
+        const result = await this.renderReducedBlob(bitmap, candidate.maxDimension, candidate.quality);
+        if (result && result.blob.size <= MAX_PAGE_BYTES) {
+          return {
+            ...result,
+            details: {
+              bitmapMs: Math.round(bitmapMs),
+              drawMs: result.details.drawMs,
+              encodeMs: result.details.encodeMs,
+              maxDimension: candidate.maxDimension,
+              quality: candidate.quality,
+              outputWidth: result.details.outputWidth,
+              outputHeight: result.details.outputHeight,
+              format: result.mimeType,
+            },
+          };
+        }
+      }
+
+      const fallback = await this.renderReducedBlob(bitmap, 1400, 0.65);
+      if (!fallback) return null;
+      return {
+        ...fallback,
+        details: {
+          bitmapMs: Math.round(bitmapMs),
+          drawMs: fallback.details.drawMs,
+          encodeMs: fallback.details.encodeMs,
+          maxDimension: 1400,
+          quality: 0.65,
+          outputWidth: fallback.details.outputWidth,
+          outputHeight: fallback.details.outputHeight,
+          format: fallback.mimeType,
+        },
+      };
+    } finally {
+      bitmap.close();
+    }
+  }
+
+  private async renderReducedBlob(bitmap: ImageBitmap, maxDimension: number, quality: number): Promise<{ blob: Blob; mimeType: string; details: { drawMs: number; encodeMs: number; outputWidth: number; outputHeight: number } } | null> {
+    const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext('2d');
+    if (!context) return null;
+
+    const drawStartedAt = performance.now();
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const drawMs = performance.now() - drawStartedAt;
+    const encodeStartedAt = performance.now();
+    const blob = await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob((value) => resolve(value), 'image/webp', quality);
+    });
+    const encodeMs = performance.now() - encodeStartedAt;
+    if (!blob) return null;
+    return {
+      blob,
+      mimeType: 'image/webp',
+      details: {
+        drawMs: Math.round(drawMs),
+        encodeMs: Math.round(encodeMs),
+        outputWidth: canvas.width,
+        outputHeight: canvas.height,
+      },
+    };
   }
 }

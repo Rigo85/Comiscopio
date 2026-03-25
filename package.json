@@ -6,9 +6,9 @@
   "main": "dist-electron/electron/main.js",
   "scripts": {
     "ng": "ng",
-    "start": "npm-run-all --parallel start:angular start:electron",
+    "start": "run-p --race start:angular watch:electron start:electron",
     "start:angular": "ng serve --port 4200",
-    "start:electron": "wait-on http://localhost:4200 && npm run build:electron && electron --no-sandbox .",
+    "start:electron": "wait-on http://localhost:4200 dist-electron/electron/main.js && electron --no-sandbox .",
     "build": "npm-run-all build:angular build:electron",
     "build:angular": "ng build --configuration production --base-href ./",
     "build:electron": "tsc -p tsconfig.electron.json",

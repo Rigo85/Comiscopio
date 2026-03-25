@@ -7,6 +7,13 @@ import type {
   AppSettings,
   RecentFile,
   Bookmark,
+  OpenFileSession,
+  OpenFileProgress,
+  OpenFileComplete,
+  OpenFileError,
+  MemoryStats,
+  ThumbnailDescriptor,
+  ThumbnailReadyEvent,
 } from '../../../shared/models';
 import { IpcChannels } from '../../../shared/ipc-channels';
 
@@ -43,8 +50,35 @@ export class ElectronService {
     return (await this.api.invoke(IpcChannels.OPEN_FILE, filePath)) as FileInfo;
   }
 
+  async startOpenFile(filePath: string): Promise<OpenFileSession> {
+    return (await this.api.invoke(IpcChannels.OPEN_FILE_START, filePath)) as OpenFileSession;
+  }
+
+  cancelOpenFile(sessionId: number): void {
+    this.api.send(IpcChannels.OPEN_FILE_CANCEL, sessionId);
+  }
+
   async requestPage(fileHash: string, pageIndex: number): Promise<PageData | null> {
     return (await this.api.invoke(IpcChannels.REQUEST_PAGE, fileHash, pageIndex)) as PageData | null;
+  }
+
+  async initThumbnails(fileHash: string): Promise<void> {
+    await this.api.invoke(IpcChannels.THUMBNAILS_INIT, fileHash);
+  }
+
+  async requestThumbnailRange(
+    fileHash: string,
+    start: number,
+    end: number,
+    focusPage: number,
+  ): Promise<ThumbnailDescriptor[]> {
+    return (await this.api.invoke(
+      IpcChannels.THUMBNAILS_REQUEST_RANGE,
+      fileHash,
+      start,
+      end,
+      focusPage,
+    )) as ThumbnailDescriptor[];
   }
 
   async cleanupTemp(fileHash: string): Promise<void> {
@@ -89,6 +123,18 @@ export class ElectronService {
     await this.api.invoke(IpcChannels.SAVE_SETTINGS, settings);
   }
 
+  async getMemoryStats(): Promise<Pick<MemoryStats, 'mainRssBytes'>> {
+    return (await this.api.invoke(IpcChannels.GET_MEMORY_STATS)) as Pick<MemoryStats, 'mainRssBytes'>;
+  }
+
+  logMemoryStats(stats: MemoryStats): void {
+    this.api.send(IpcChannels.LOG_MEMORY_STATS, stats);
+  }
+
+  logPerformanceEvent(payload: unknown): void {
+    this.api.send(IpcChannels.LOG_PERFORMANCE_EVENT, payload);
+  }
+
   // --- Window controls ---
 
   minimize(): void {
@@ -125,6 +171,26 @@ export class ElectronService {
 
   onFileOpened(listener: (filePath: string) => void): () => void {
     return this.api.on(IpcChannels.FILE_OPENED, listener as any);
+  }
+
+  onOpenFileProgress(listener: (event: OpenFileProgress) => void): () => void {
+    return this.api.on(IpcChannels.OPEN_FILE_PROGRESS, listener as any);
+  }
+
+  onOpenFileComplete(listener: (event: OpenFileComplete) => void): () => void {
+    return this.api.on(IpcChannels.OPEN_FILE_COMPLETE, listener as any);
+  }
+
+  onOpenFileError(listener: (event: OpenFileError) => void): () => void {
+    return this.api.on(IpcChannels.OPEN_FILE_ERROR, listener as any);
+  }
+
+  onOpenFileCancelled(listener: (event: { sessionId: number }) => void): () => void {
+    return this.api.on(IpcChannels.OPEN_FILE_CANCELLED, listener as any);
+  }
+
+  onThumbnailReady(listener: (event: ThumbnailReadyEvent) => void): () => void {
+    return this.api.on(IpcChannels.THUMBNAIL_READY, listener as any);
   }
 }
 

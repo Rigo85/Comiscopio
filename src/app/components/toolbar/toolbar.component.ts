@@ -1,4 +1,4 @@
-import { Component, input, output, signal, computed, HostListener, ElementRef, ViewChild } from '@angular/core';
+import { Component, input, output, signal } from '@angular/core';
 
 /**
  * Bottom toolbar with page slider.
@@ -23,11 +23,14 @@ import { Component, input, output, signal, computed, HostListener, ElementRef, V
         [value]="currentPage()"
         (input)="onSliderInput(slider.value)"
         (change)="onSliderChange(slider.value)"
+        (pointerdown)="$event.stopPropagation()"
+        (click)="$event.stopPropagation()"
       />
       <span class="toolbar-page">{{ totalPages() }}</span>
     </div>
     <div
       class="toolbar-trigger"
+      [class.inactive]="visible()"
       (mouseenter)="show()"
     ></div>
   `,
@@ -65,6 +68,10 @@ import { Component, input, output, signal, computed, HostListener, ElementRef, V
       right: 0;
       height: 40px;
       pointer-events: auto;
+
+      &.inactive {
+        pointer-events: none;
+      }
     }
 
     .toolbar-page {
@@ -86,12 +93,13 @@ import { Component, input, output, signal, computed, HostListener, ElementRef, V
 
       &::-webkit-slider-thumb {
         appearance: none;
-        width: 14px;
-        height: 14px;
-        border-radius: 50%;
-        background: #aaa;
+        width: 10px;
+        height: 18px;
+        border-radius: 3px;
+        background: #c7c7c7;
         cursor: pointer;
         transition: background 0.1s;
+        border: 1px solid #1f1f1f;
 
         &:hover {
           background: #fff;
@@ -132,7 +140,10 @@ export class ToolbarComponent {
   }
 
   onSliderInput(value: string): void {
-    // Preview while dragging — no page change yet
+    const page = parseInt(value, 10);
+    if (!isNaN(page)) {
+      this.pageChange.emit(page);
+    }
   }
 
   onSliderChange(value: string): void {
