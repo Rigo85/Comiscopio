@@ -17,7 +17,7 @@ export interface ContextMenuAction {
     | 'zen-mode'
     | 'add-bookmark'
     | 'goto-bookmark'
-    | 'load-full-quality'
+
     | 'open-folder';
   value?: any;
 }
@@ -123,7 +123,6 @@ export class ContextMenuComponent {
   isAlwaysOnTop = input(false);
   isFullscreen = input(false);
   showThumbnails = input(false);
-  canLoadFullQuality = input(false);
 
   action = output<ContextMenuAction>();
 
@@ -204,9 +203,6 @@ export class ContextMenuComponent {
 
       items.push({ label: 'Ir a página...', action: { type: 'goto-page' } });
       items.push({ label: 'Agregar marcador', action: { type: 'add-bookmark' } });
-      if (this.canLoadFullQuality()) {
-        items.push({ label: 'Cargar página en calidad completa', action: { type: 'load-full-quality' } });
-      }
       items.push({ label: 'Miniaturas', action: { type: 'thumbnails' }, active: this.showThumbnails() });
       items.push({ label: 'Resetear filtros', action: { type: 'reset-filters' } });
 

@@ -156,9 +156,7 @@ export class ThumbnailsComponent implements OnChanges, OnDestroy {
     if (changes['totalPages'] || changes['fileHash']) {
       this.pageIndices.set(Array.from({ length: this.totalPages() }, (_, i) => i));
       this.thumbnailUrls.clear();
-      if (this.fileHash()) {
-        this.thumbnailCache.init(this.fileHash()!, this.totalPages());
-      } else {
+      if (!this.fileHash()) {
         this.thumbnailCache.clear();
       }
     }
@@ -177,21 +175,15 @@ export class ThumbnailsComponent implements OnChanges, OnDestroy {
     void this.loadVisibleThumbnails();
   }
 
-  private async loadVisibleThumbnails(): Promise<void> {
+  private loadVisibleThumbnails(): void {
     const total = this.totalPages();
     if (!this.visible() || total === 0) return;
 
-    const list = this.listRef?.nativeElement;
-    const estimatedItemHeight = 130;
-    const scrollTop = list?.scrollTop ?? Math.max(0, this.currentPage() * estimatedItemHeight - estimatedItemHeight * 2);
-    const viewportHeight = list?.clientHeight ?? 600;
-
-    const start = Math.max(0, Math.floor(scrollTop / estimatedItemHeight) - 4);
-    const end = Math.min(total, Math.ceil((scrollTop + viewportHeight) / estimatedItemHeight) + 6);
-
-    const immediate = await this.thumbnailCache.requestRange(start, end, this.currentPage());
-    for (const [pageIndex, fileUrl] of immediate) {
-      this.thumbnailUrls.set(pageIndex, fileUrl);
+    // Populate URLs for thumbs that are already ready
+    for (let i = 0; i < total; i++) {
+      if (this.thumbnailCache.isReady(i) && !this.thumbnailUrls.has(i)) {
+        this.thumbnailUrls.set(i, this.thumbnailCache.getThumbUrl(i));
+      }
     }
   }
 

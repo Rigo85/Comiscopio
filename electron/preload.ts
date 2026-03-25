@@ -4,17 +4,12 @@ import { IpcChannels } from '../shared/ipc-channels';
 const validInvokeChannels = new Set([
   IpcChannels.OPEN_FILE_DIALOG,
   IpcChannels.OPEN_FOLDER_DIALOG,
-  IpcChannels.OPEN_FILE,
-  IpcChannels.OPEN_FILE_START,
-  IpcChannels.REQUEST_PAGE,
-  IpcChannels.THUMBNAILS_INIT,
-  IpcChannels.THUMBNAILS_REQUEST_RANGE,
+  IpcChannels.WORKER_START,
   IpcChannels.SAVE_PROGRESS,
   IpcChannels.GET_PROGRESS,
   IpcChannels.GET_RECENT_FILES,
   IpcChannels.GET_SETTINGS,
   IpcChannels.SAVE_SETTINGS,
-  IpcChannels.GET_MEMORY_STATS,
   IpcChannels.CLEANUP_TEMP,
   IpcChannels.ADD_BOOKMARK,
   IpcChannels.GET_BOOKMARKS,
@@ -24,25 +19,20 @@ const validInvokeChannels = new Set([
 ]);
 
 const validSendChannels = new Set([
+  IpcChannels.WORKER_FOCUS,
+  IpcChannels.WORKER_CLOSE,
   IpcChannels.WINDOW_MINIMIZE,
   IpcChannels.WINDOW_MAXIMIZE,
   IpcChannels.WINDOW_CLOSE,
   IpcChannels.WINDOW_TOGGLE_ALWAYS_ON_TOP,
   IpcChannels.WINDOW_TOGGLE_FULLSCREEN,
   IpcChannels.WINDOW_NEW,
-  IpcChannels.OPEN_FILE_CANCEL,
-  IpcChannels.LOG_MEMORY_STATS,
-  IpcChannels.LOG_PERFORMANCE_EVENT,
 ]);
 
 const validOnChannels = new Set([
   IpcChannels.WINDOW_STATE_CHANGED,
   IpcChannels.FILE_OPENED,
-  IpcChannels.OPEN_FILE_PROGRESS,
-  IpcChannels.OPEN_FILE_COMPLETE,
-  IpcChannels.OPEN_FILE_ERROR,
-  IpcChannels.OPEN_FILE_CANCELLED,
-  IpcChannels.THUMBNAIL_READY,
+  IpcChannels.WORKER_EVENT,
 ]);
 
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -64,9 +54,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     if (!validOnChannels.has(channel as any)) {
       throw new Error(`Invalid on channel: ${channel}`);
     }
-    const subscription = (_event: Electron.IpcRendererEvent, ...args: unknown[]) => listener(...args);
-    ipcRenderer.on(channel, subscription);
-    return () => ipcRenderer.removeListener(channel, subscription);
+    const sub = (_event: Electron.IpcRendererEvent, ...args: unknown[]) => listener(...args);
+    ipcRenderer.on(channel, sub);
+    return () => ipcRenderer.removeListener(channel, sub);
   },
 
   getPathForFile: (file: File) => webUtils.getPathForFile(file),

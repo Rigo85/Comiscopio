@@ -1,26 +1,8 @@
 import { Injectable } from '@angular/core';
 import type { ElectronAPI } from '../../types/electron-api';
-import type {
-  FileInfo,
-  PageData,
-  ReadingProgress,
-  AppSettings,
-  RecentFile,
-  Bookmark,
-  OpenFileSession,
-  OpenFileProgress,
-  OpenFileComplete,
-  OpenFileError,
-  MemoryStats,
-  ThumbnailDescriptor,
-  ThumbnailReadyEvent,
-} from '../../../shared/models';
+import type { ReadingProgress, AppSettings, RecentFile, Bookmark } from '../../../shared/models';
 import { IpcChannels } from '../../../shared/ipc-channels';
 
-/**
- * Angular service that bridges to Electron's main process via the preload API.
- * All IPC communication goes through this service.
- */
 @Injectable({ providedIn: 'root' })
 export class ElectronService {
   private api: ElectronAPI;
@@ -36,7 +18,7 @@ export class ElectronService {
     return !!window.electronAPI;
   }
 
-  // --- File operations ---
+  // --- File dialogs ---
 
   async openFileDialog(): Promise<string | null> {
     return (await this.api.invoke(IpcChannels.OPEN_FILE_DIALOG)) as string | null;
@@ -46,43 +28,28 @@ export class ElectronService {
     return (await this.api.invoke(IpcChannels.OPEN_FOLDER_DIALOG)) as string | null;
   }
 
-  async openFile(filePath: string): Promise<FileInfo> {
-    return (await this.api.invoke(IpcChannels.OPEN_FILE, filePath)) as FileInfo;
+  // --- Native worker ---
+
+  async workerStart(filePath: string): Promise<{
+    fileHash: string;
+    fileName: string;
+    filePath: string;
+    totalPages: number;
+    alreadyOpen: boolean;
+  }> {
+    return (await this.api.invoke(IpcChannels.WORKER_START, filePath)) as any;
   }
 
-  async startOpenFile(filePath: string): Promise<OpenFileSession> {
-    return (await this.api.invoke(IpcChannels.OPEN_FILE_START, filePath)) as OpenFileSession;
+  workerFocus(fileHash: string, page: number): void {
+    this.api.send(IpcChannels.WORKER_FOCUS, fileHash, page);
   }
 
-  cancelOpenFile(sessionId: number): void {
-    this.api.send(IpcChannels.OPEN_FILE_CANCEL, sessionId);
+  workerClose(fileHash: string): void {
+    this.api.send(IpcChannels.WORKER_CLOSE, fileHash);
   }
 
-  async requestPage(fileHash: string, pageIndex: number): Promise<PageData | null> {
-    return (await this.api.invoke(IpcChannels.REQUEST_PAGE, fileHash, pageIndex)) as PageData | null;
-  }
-
-  async initThumbnails(fileHash: string): Promise<void> {
-    await this.api.invoke(IpcChannels.THUMBNAILS_INIT, fileHash);
-  }
-
-  async requestThumbnailRange(
-    fileHash: string,
-    start: number,
-    end: number,
-    focusPage: number,
-  ): Promise<ThumbnailDescriptor[]> {
-    return (await this.api.invoke(
-      IpcChannels.THUMBNAILS_REQUEST_RANGE,
-      fileHash,
-      start,
-      end,
-      focusPage,
-    )) as ThumbnailDescriptor[];
-  }
-
-  async cleanupTemp(fileHash: string): Promise<void> {
-    await this.api.invoke(IpcChannels.CLEANUP_TEMP, fileHash);
+  onWorkerEvent(listener: (event: any) => void): () => void {
+    return this.api.on(IpcChannels.WORKER_EVENT, listener as any);
   }
 
   // --- Reading progress ---
@@ -123,43 +90,14 @@ export class ElectronService {
     await this.api.invoke(IpcChannels.SAVE_SETTINGS, settings);
   }
 
-  async getMemoryStats(): Promise<Pick<MemoryStats, 'mainRssBytes'>> {
-    return (await this.api.invoke(IpcChannels.GET_MEMORY_STATS)) as Pick<MemoryStats, 'mainRssBytes'>;
-  }
-
-  logMemoryStats(stats: MemoryStats): void {
-    this.api.send(IpcChannels.LOG_MEMORY_STATS, stats);
-  }
-
-  logPerformanceEvent(payload: unknown): void {
-    this.api.send(IpcChannels.LOG_PERFORMANCE_EVENT, payload);
-  }
-
   // --- Window controls ---
 
-  minimize(): void {
-    this.api.send(IpcChannels.WINDOW_MINIMIZE);
-  }
-
-  maximize(): void {
-    this.api.send(IpcChannels.WINDOW_MAXIMIZE);
-  }
-
-  close(): void {
-    this.api.send(IpcChannels.WINDOW_CLOSE);
-  }
-
-  toggleAlwaysOnTop(): void {
-    this.api.send(IpcChannels.WINDOW_TOGGLE_ALWAYS_ON_TOP);
-  }
-
-  toggleFullscreen(): void {
-    this.api.send(IpcChannels.WINDOW_TOGGLE_FULLSCREEN);
-  }
-
-  newWindow(): void {
-    this.api.send(IpcChannels.WINDOW_NEW);
-  }
+  minimize(): void { this.api.send(IpcChannels.WINDOW_MINIMIZE); }
+  maximize(): void { this.api.send(IpcChannels.WINDOW_MAXIMIZE); }
+  close(): void { this.api.send(IpcChannels.WINDOW_CLOSE); }
+  toggleAlwaysOnTop(): void { this.api.send(IpcChannels.WINDOW_TOGGLE_ALWAYS_ON_TOP); }
+  toggleFullscreen(): void { this.api.send(IpcChannels.WINDOW_TOGGLE_FULLSCREEN); }
+  newWindow(): void { this.api.send(IpcChannels.WINDOW_NEW); }
 
   async getWindowState(): Promise<WindowState> {
     return (await this.api.invoke(IpcChannels.WINDOW_IS_MAXIMIZED)) as WindowState;
@@ -173,24 +111,10 @@ export class ElectronService {
     return this.api.on(IpcChannels.FILE_OPENED, listener as any);
   }
 
-  onOpenFileProgress(listener: (event: OpenFileProgress) => void): () => void {
-    return this.api.on(IpcChannels.OPEN_FILE_PROGRESS, listener as any);
-  }
+  // --- Helpers ---
 
-  onOpenFileComplete(listener: (event: OpenFileComplete) => void): () => void {
-    return this.api.on(IpcChannels.OPEN_FILE_COMPLETE, listener as any);
-  }
-
-  onOpenFileError(listener: (event: OpenFileError) => void): () => void {
-    return this.api.on(IpcChannels.OPEN_FILE_ERROR, listener as any);
-  }
-
-  onOpenFileCancelled(listener: (event: { sessionId: number }) => void): () => void {
-    return this.api.on(IpcChannels.OPEN_FILE_CANCELLED, listener as any);
-  }
-
-  onThumbnailReady(listener: (event: ThumbnailReadyEvent) => void): () => void {
-    return this.api.on(IpcChannels.THUMBNAIL_READY, listener as any);
+  getPathForFile(file: File): string {
+    return this.api.getPathForFile(file);
   }
 }
 
