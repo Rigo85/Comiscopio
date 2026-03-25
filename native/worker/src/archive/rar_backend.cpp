@@ -1,12 +1,16 @@
 #include "archive_backend.h"
 #include "unrar_compat.h"
+
 #include <algorithm>
-#include <cstring>
+#include <cctype>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <memory>
-#include <stdexcept>
 #include <set>
+#include <stdexcept>
+#include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -16,7 +20,9 @@ static const std::set<std::string> IMAGE_EXTENSIONS = {
 
 static std::string toLower(const std::string& s) {
     std::string result = s;
-    std::transform(result.begin(), result.end(), result.begin(), ::tolower);
+    std::transform(result.begin(), result.end(), result.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
     return result;
 }
 
@@ -31,109 +37,131 @@ static bool isImageFile(const std::string& filename) {
 }
 
 struct RarIndexEntry {
-    std::string archiveName;  // name inside the archive
-    std::string rawPath;      // path on disk after extraction
-    int sortedIndex;
+    std::string archiveName;
+    std::string rawPath;
 };
 
-/**
- * RAR backend using the UnRAR DLL API.
- *
- * Single sequential scan: lists all entries, extracts images to raw/ directory,
- * sorts by name. After that, any page is accessible instantly from disk.
- */
 class RarBackend : public ArchiveBackend {
 public:
     int open(const std::string& archivePath, const std::string& rawDir,
              ProgressCb progressCb, void* userData) override {
-
         this->rawDir = rawDir;
         entries.clear();
-
         fs::create_directories(rawDir);
 
-        // Single pass: list + extract all image entries
-        RAROpenArchiveDataEx arcData{};
-        arcData.ArcName = const_cast<char*>(archivePath.c_str());
-        arcData.OpenMode = RAR_OM_EXTRACT;
+        std::vector<RarIndexEntry> extractedEntries;
+        extractedEntries.reserve(1024);
 
-        HANDLE hArc = RAROpenArchiveEx(&arcData);
-        if (!hArc || arcData.OpenResult != 0) {
-            throw std::runtime_error("Failed to open RAR archive: " + archivePath);
-        }
+        openArchive(archivePath, [&](HANDLE hArc) {
+            RARHeaderDataEx header{};
+            int imageCount = 0;
 
-        // Collect all image entries with their data
-        struct RawEntry {
-            std::string name;
-            std::vector<uint8_t> data;
-        };
-        std::vector<RawEntry> rawEntries;
+            while (RARReadHeaderEx(hArc, &header) == 0) {
+                std::string name(header.FileName);
+                const bool isDir = (header.Flags & RHDF_DIRECTORY) != 0;
+                const bool isImage = !isDir && isImageFile(name);
 
-        extractBuffer.clear();
-        RARSetCallback(hArc, extractCallback, reinterpret_cast<LPARAM>(this));
-
-        RARHeaderDataEx header{};
-        int scanned = 0;
-
-        while (RARReadHeaderEx(hArc, &header) == 0) {
-            std::string name(header.FileName);
-            bool isDir = (header.Flags & RHDF_DIRECTORY) != 0;
-            bool isImage = !isDir && isImageFile(name);
-
-            if (isImage) {
-                extractBuffer.clear();
-                int result = RARProcessFile(hArc, RAR_TEST, nullptr, nullptr);
-                if (result == 0) {
-                    rawEntries.push_back({name, std::move(extractBuffer)});
-                    extractBuffer = {}; // reset after move
-                } else {
-                    // Extraction failed for this entry — store empty
-                    rawEntries.push_back({name, {}});
+                if (!isImage) {
+                    RARProcessFile(hArc, RAR_SKIP, nullptr, nullptr);
+                    continue;
                 }
-                scanned++;
-            } else {
-                RARProcessFile(hArc, RAR_SKIP, nullptr, nullptr);
+
+                std::string ext = getExtension(name);
+                if (ext.empty()) ext = ".bin";
+
+                char tmpName[32];
+                snprintf(tmpName, sizeof(tmpName), "raw_%06d%s", imageCount, ext.c_str());
+                std::string rawPath = rawDir + "/" + tmpName;
+
+                beginStreamingWrite(rawPath);
+                const int result = RARProcessFile(hArc, RAR_TEST, nullptr, nullptr);
+                finishStreamingWrite(result == 0);
+
+                if (result == 0 && lastWriteOk && fs::exists(rawPath)) {
+                    extractedEntries.push_back({name, rawPath});
+                } else {
+                    extractedEntries.push_back({name, ""});
+                }
+
+                if (progressCb) {
+                    progressCb(imageCount, -1, name, userData);
+                }
+                imageCount++;
             }
-        }
-
-        RARCloseArchive(hArc);
-
-        // Sort naturally by name
-        std::vector<size_t> sortOrder(rawEntries.size());
-        for (size_t i = 0; i < sortOrder.size(); i++) sortOrder[i] = i;
-        std::sort(sortOrder.begin(), sortOrder.end(), [&](size_t a, size_t b) {
-            return rawEntries[a].name < rawEntries[b].name;
         });
 
-        // Write to disk in sorted order and build index
-        int totalImages = static_cast<int>(sortOrder.size());
-        for (int i = 0; i < totalImages; i++) {
-            const auto& raw = rawEntries[sortOrder[i]];
-            std::string ext = getExtension(raw.name);
-            if (ext.empty()) ext = ".bin";
+        entries = sortAndRename(rawDir, std::move(extractedEntries));
+        return static_cast<int>(entries.size());
+    }
 
-            char idxBuf[16];
-            snprintf(idxBuf, sizeof(idxBuf), "%06d", i);
-            std::string rawFileName = std::string(idxBuf) + ext;
-            std::string rawPath = rawDir + "/" + rawFileName;
+    bool extractPreview(const std::string& archivePath, const std::string& rawDir,
+                        int sortedIndex, std::string& outEntryName,
+                        std::string& outRawRelativePath) override {
+        if (sortedIndex < 0) return false;
+        fs::create_directories(rawDir);
 
-            if (!raw.data.empty()) {
-                std::ofstream out(rawPath, std::ios::binary);
-                out.write(reinterpret_cast<const char*>(raw.data.data()), raw.data.size());
+        std::vector<std::string> names;
+        openArchive(archivePath, [&](HANDLE hArc) {
+            RARHeaderDataEx header{};
+            while (RARReadHeaderEx(hArc, &header) == 0) {
+                std::string name(header.FileName);
+                const bool isDir = (header.Flags & RHDF_DIRECTORY) != 0;
+                if (!isDir && isImageFile(name)) {
+                    names.push_back(name);
+                }
+                RARProcessFile(hArc, RAR_SKIP, nullptr, nullptr);
             }
+        });
 
-            RarIndexEntry entry;
-            entry.archiveName = raw.name;
-            entry.rawPath = rawPath;
-            entry.sortedIndex = i;
-            entries.push_back(entry);
-
-            if (progressCb) {
-                progressCb(i, totalImages, raw.name, userData);
-            }
+        if (names.empty() || sortedIndex >= static_cast<int>(names.size())) {
+            return false;
         }
 
-        return totalImages;
+        std::sort(names.begin(), names.end());
+        const std::string targetName = names[sortedIndex];
+        const std::string ext = getExtension(targetName).empty() ? ".bin" : getExtension(targetName);
+
+        char finalName[32];
+        snprintf(finalName, sizeof(finalName), "%06d%s", sortedIndex, ext.c_str());
+        const std::string finalPath = rawDir + "/" + finalName;
+        if (fs::exists(finalPath)) {
+            outEntryName = targetName;
+            outRawRelativePath = std::string("raw/") + finalName;
+            return true;
+        }
+
+        bool extracted = false;
+        openArchive(archivePath, [&](HANDLE hArc) {
+            RARHeaderDataEx header{};
+            while (RARReadHeaderEx(hArc, &header) == 0) {
+                std::string name(header.FileName);
+                const bool isDir = (header.Flags & RHDF_DIRECTORY) != 0;
+                if (isDir || !isImageFile(name)) {
+                    RARProcessFile(hArc, RAR_SKIP, nullptr, nullptr);
+                    continue;
+                }
+
+                if (name == targetName) {
+                    beginStreamingWrite(finalPath);
+                    const int result = RARProcessFile(hArc, RAR_TEST, nullptr, nullptr);
+                    finishStreamingWrite(result == 0);
+                    extracted = (result == 0 && lastWriteOk && fs::exists(finalPath));
+                    break;
+                }
+
+                RARProcessFile(hArc, RAR_SKIP, nullptr, nullptr);
+            }
+        });
+
+        if (!extracted) {
+            std::error_code ec;
+            fs::remove(finalPath, ec);
+            return false;
+        }
+
+        outEntryName = targetName;
+        outRawRelativePath = std::string("raw/") + finalName;
+        return true;
     }
 
     int entryCount() const override {
@@ -149,36 +177,133 @@ public:
         if (index < 0 || index >= static_cast<int>(entries.size())) return false;
 
         const auto& entry = entries[index];
-        if (!fs::exists(entry.rawPath)) return false;
+        if (entry.rawPath.empty() || !fs::exists(entry.rawPath)) return false;
 
-        auto fileSize = fs::file_size(entry.rawPath);
+        const auto fileSize = fs::file_size(entry.rawPath);
         outData.resize(fileSize);
         std::ifstream in(entry.rawPath, std::ios::binary);
         if (!in) return false;
-        in.read(reinterpret_cast<char*>(outData.data()), fileSize);
+        in.read(reinterpret_cast<char*>(outData.data()), static_cast<std::streamsize>(fileSize));
         return true;
     }
 
     void close() override {
         entries.clear();
-        extractBuffer.clear();
+        closeCurrentStream();
     }
 
 private:
-    std::string rawDir;
-    std::vector<RarIndexEntry> entries;
-    std::vector<uint8_t> extractBuffer;
+    template <typename Fn>
+    void openArchive(const std::string& archivePath, Fn&& fn) {
+        RAROpenArchiveDataEx arcData{};
+        arcData.ArcName = const_cast<char*>(archivePath.c_str());
+        arcData.OpenMode = RAR_OM_EXTRACT;
+
+        HANDLE hArc = RAROpenArchiveEx(&arcData);
+        if (!hArc || arcData.OpenResult != 0) {
+            throw std::runtime_error("Failed to open RAR archive: " + archivePath);
+        }
+
+        RARSetCallback(hArc, extractCallback, reinterpret_cast<LPARAM>(this));
+        try {
+            fn(hArc);
+            RARCloseArchive(hArc);
+        } catch (...) {
+            RARCloseArchive(hArc);
+            throw;
+        }
+    }
+
+    void beginStreamingWrite(const std::string& path) {
+        closeCurrentStream();
+        currentOutputPath = path;
+        currentOutput.open(path, std::ios::binary | std::ios::trunc);
+        lastWriteOk = currentOutput.is_open();
+    }
+
+    void finishStreamingWrite(bool ok) {
+        if (currentOutput.is_open()) {
+            currentOutput.flush();
+            currentOutput.close();
+        }
+        if (!ok || !lastWriteOk) {
+            std::error_code ec;
+            fs::remove(currentOutputPath, ec);
+        }
+        currentOutputPath.clear();
+    }
+
+    void closeCurrentStream() {
+        if (currentOutput.is_open()) {
+            currentOutput.close();
+        }
+        currentOutputPath.clear();
+        lastWriteOk = true;
+    }
 
     static int CALLBACK extractCallback(UINT msg, LPARAM userData, LPARAM p1, LPARAM p2) {
-        if (msg == UCM_PROCESSDATA) {
-            auto* self = reinterpret_cast<RarBackend*>(userData);
-            auto* data = reinterpret_cast<const uint8_t*>(p1);
-            size_t size = static_cast<size_t>(p2);
-            self->extractBuffer.insert(self->extractBuffer.end(), data, data + size);
-            return 1;
+        if (msg != UCM_PROCESSDATA) return 1;
+
+        auto* self = reinterpret_cast<RarBackend*>(userData);
+        if (!self->currentOutput.is_open()) {
+            self->lastWriteOk = false;
+            return -1;
         }
-        return 0;
+
+        self->currentOutput.write(reinterpret_cast<const char*>(p1), static_cast<std::streamsize>(p2));
+        if (!self->currentOutput.good()) {
+            self->lastWriteOk = false;
+            return -1;
+        }
+
+        return 1;
     }
+
+    static std::vector<RarIndexEntry> sortAndRename(const std::string& rawDir,
+                                                    std::vector<RarIndexEntry>&& input) {
+        std::vector<size_t> sortOrder(input.size());
+        for (size_t i = 0; i < sortOrder.size(); i++) sortOrder[i] = i;
+
+        std::sort(sortOrder.begin(), sortOrder.end(), [&](size_t a, size_t b) {
+            return input[a].archiveName < input[b].archiveName;
+        });
+
+        std::vector<RarIndexEntry> sortedEntries;
+        sortedEntries.reserve(input.size());
+        for (size_t i = 0; i < sortOrder.size(); i++) {
+            auto& entry = input[sortOrder[i]];
+            if (entry.rawPath.empty()) {
+                sortedEntries.push_back({entry.archiveName, ""});
+                continue;
+            }
+
+            std::string ext = getExtension(entry.archiveName);
+            if (ext.empty()) ext = ".bin";
+
+            char finalName[32];
+            snprintf(finalName, sizeof(finalName), "%06d%s", static_cast<int>(i), ext.c_str());
+            std::string finalPath = rawDir + "/" + finalName;
+
+            if (entry.rawPath != finalPath) {
+                std::error_code ec;
+                fs::rename(entry.rawPath, finalPath, ec);
+                if (ec) {
+                    fs::copy_file(entry.rawPath, finalPath, fs::copy_options::overwrite_existing, ec);
+                    fs::remove(entry.rawPath, ec);
+                }
+            }
+
+            sortedEntries.push_back({entry.archiveName, finalPath});
+        }
+
+        return sortedEntries;
+    }
+
+    std::string rawDir;
+    std::vector<RarIndexEntry> entries;
+    std::ofstream currentOutput;
+    std::string currentOutputPath;
+    bool lastWriteOk = true;
 };
 
 std::unique_ptr<ArchiveBackend> createRarBackend() {

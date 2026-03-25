@@ -10,6 +10,7 @@ export interface ContextMenuAction {
     | 'fullscreen'
     | 'thumbnails'
     | 'goto-page'
+    | 'page-source'
     | 'open-file'
     | 'reset-filters'
     | 'close-file'
@@ -123,6 +124,7 @@ export class ContextMenuComponent {
   isAlwaysOnTop = input(false);
   isFullscreen = input(false);
   showThumbnails = input(false);
+  pageSource = input<'optimized' | 'original'>('optimized');
 
   action = output<ContextMenuAction>();
 
@@ -202,6 +204,8 @@ export class ContextMenuComponent {
       items.push({ separator: true });
 
       items.push({ label: 'Ir a página...', action: { type: 'goto-page' } });
+      items.push({ label: 'Ver optimizada', action: { type: 'page-source', value: 'optimized' }, active: this.pageSource() === 'optimized' });
+      items.push({ label: 'Ver original', action: { type: 'page-source', value: 'original' }, active: this.pageSource() === 'original' });
       items.push({ label: 'Agregar marcador', action: { type: 'add-bookmark' } });
       items.push({ label: 'Miniaturas', action: { type: 'thumbnails' }, active: this.showThumbnails() });
       items.push({ label: 'Resetear filtros', action: { type: 'reset-filters' } });

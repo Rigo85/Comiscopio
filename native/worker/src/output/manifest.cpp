@@ -14,13 +14,22 @@ Manifest::Manifest(const std::string& outputDir, const std::string& sourcePath,
     root["pages"] = json::array();
 }
 
+static void ensurePageSlot(json& root, int index) {
+    auto& pages = root["pages"];
+    while (static_cast<int>(pages.size()) <= index) {
+        pages.push_back(nullptr);
+    }
+}
+
 void Manifest::addPage(int index, const std::string& originalName,
                        const ImageResult& result,
-                       const std::string& thumbFile, const std::string& pageFile) {
+                       const std::string& thumbFile, const std::string& pageFile,
+                       const std::string& originalFile) {
     json page;
     page["index"] = index;
     page["status"] = "ok";
     page["originalName"] = originalName;
+    page["original"] = originalFile;
     page["originalWidth"] = result.originalWidth;
     page["originalHeight"] = result.originalHeight;
     page["thumb"] = thumbFile;
@@ -28,20 +37,24 @@ void Manifest::addPage(int index, const std::string& originalName,
     page["pageWidth"] = result.pageWidth;
     page["pageHeight"] = result.pageHeight;
     page["bypassed"] = result.bypassed;
-    root["pages"].push_back(page);
+    ensurePageSlot(root, index);
+    root["pages"][index] = page;
 }
 
 void Manifest::addErrorPage(int index, const std::string& originalName,
                             const std::string& errorMessage,
-                            const std::string& thumbFile, const std::string& pageFile) {
+                            const std::string& thumbFile, const std::string& pageFile,
+                            const std::string& originalFile) {
     json page;
     page["index"] = index;
     page["status"] = "error";
     page["originalName"] = originalName;
+    page["original"] = originalFile;
     page["errorMessage"] = errorMessage;
     page["thumb"] = thumbFile;
     page["page"] = pageFile;
-    root["pages"].push_back(page);
+    ensurePageSlot(root, index);
+    root["pages"][index] = page;
 }
 
 void Manifest::write() {

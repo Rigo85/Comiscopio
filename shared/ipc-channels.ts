@@ -13,6 +13,7 @@ export const IpcChannels = {
   WORKER_EVENT: 'worker-event',
   WORKER_FOCUS: 'worker-focus',
   WORKER_CLOSE: 'worker-close',
+  GET_WORKER_MANIFEST: 'get-worker-manifest',
 
   // Page/thumb resolution
   REQUEST_PAGE_PATH: 'request-page-path',

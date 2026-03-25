@@ -23,6 +23,7 @@ export interface WorkerSession {
 }
 
 type EventListener = (event: WorkerEvent) => void;
+type ArtifactVariant = 'optimized' | 'original';
 
 /**
  * Orchestrates the native comiscopio-worker process.
@@ -40,21 +41,61 @@ export class NativeWorkerBridge {
 
   /** Get path to the native worker binary */
   private getWorkerBinaryPath(): string {
+    const executable = process.platform === 'win32' ? 'comiscopio-worker.exe' : 'comiscopio-worker';
     if (app.isPackaged) {
       // In packaged app: look in extraResources or alongside the app
       const candidates = [
-        path.join(process.resourcesPath, 'native', 'comiscopio-worker'),
-        path.join(path.dirname(app.getPath('exe')), 'native', 'comiscopio-worker'),
+        path.join(process.resourcesPath, 'native', executable),
+        path.join(path.dirname(app.getPath('exe')), 'native', executable),
       ];
       for (const p of candidates) {
         if (fs.existsSync(p)) return p;
       }
     }
     // Dev mode: build directory
-    const devPath = path.join(__dirname, '..', '..', 'native', 'worker', 'build', 'comiscopio-worker');
-    if (fs.existsSync(devPath)) return devPath;
+    const devCandidates = [
+      path.join(__dirname, '..', '..', 'native', 'worker', 'build', executable),
+      path.join(__dirname, '..', '..', 'native', 'worker', 'build-debug', executable),
+    ];
+    for (const p of devCandidates) {
+      if (fs.existsSync(p)) return p;
+    }
 
     throw new Error('comiscopio-worker binary not found');
+  }
+
+  private getWorkerEnv(binaryPath: string): NodeJS.ProcessEnv {
+    const env = { ...process.env };
+    const libDirs = new Set<string>();
+
+    if (app.isPackaged) {
+      libDirs.add(path.join(process.resourcesPath, 'native', 'lib'));
+      libDirs.add(path.join(path.dirname(app.getPath('exe')), 'native', 'lib'));
+    } else {
+      libDirs.add(path.join(path.dirname(binaryPath), 'lib'));
+      libDirs.add(path.join(__dirname, '..', '..', 'native', 'worker', 'vendor', process.platform, process.arch, 'lib'));
+    }
+
+    const existing = (() => {
+      switch (process.platform) {
+        case 'win32': return env.PATH || '';
+        case 'darwin': return env.DYLD_LIBRARY_PATH || '';
+        default: return env.LD_LIBRARY_PATH || '';
+      }
+    })();
+
+    const joined = Array.from(libDirs)
+      .filter((dir) => fs.existsSync(dir))
+      .concat(existing ? [existing] : [])
+      .join(path.delimiter);
+
+    if (joined) {
+      if (process.platform === 'win32') env.PATH = joined;
+      else if (process.platform === 'darwin') env.DYLD_LIBRARY_PATH = joined;
+      else env.LD_LIBRARY_PATH = joined;
+    }
+
+    return env;
   }
 
   /** Start a new worker session for a file */
@@ -64,10 +105,12 @@ export class NativeWorkerBridge {
     listener: EventListener,
     options: {
       backend?: string;
+      readerFormat?: 'webp' | 'jpeg';
       thumbWidth?: number;
       thumbQuality?: number;
       readerMaxDimension?: number;
       readerQuality?: number;
+      vipsConcurrency?: number;
       windowBefore?: number;
       windowAfter?: number;
     } = {},
@@ -91,21 +134,25 @@ export class NativeWorkerBridge {
 
     const binaryPath = this.getWorkerBinaryPath();
     const backend = options.backend || this.detectBackend(filePath);
+    const readerFormat = options.readerFormat || (process.env.COMISCOPIO_READER_FORMAT === 'webp' ? 'webp' : 'jpeg');
 
     const args = [
       '--input', filePath,
       '--output', outputDir,
       '--backend', backend,
+      '--reader-format', readerFormat,
       '--thumb-width', String(options.thumbWidth || 180),
       '--thumb-quality', String(options.thumbQuality || 60),
       '--reader-max-dimension', String(options.readerMaxDimension || 2400),
       '--reader-quality', String(options.readerQuality || 82),
+      '--vips-concurrency', String(options.vipsConcurrency || 1),
       '--window-before', String(options.windowBefore || 2),
       '--window-after', String(options.windowAfter || 3),
     ];
 
     const proc = spawn(binaryPath, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
+      env: this.getWorkerEnv(binaryPath),
     });
 
     session.process = proc;
@@ -120,6 +167,9 @@ export class NativeWorkerBridge {
         if (event.type === 'archive') {
           session.totalPages = event.totalPages || 0;
           session.ready = true;
+
+          // Auto-focus page 0 so the first page is ready before renderer asks
+          this.focus(fileHash, 0);
         }
 
         listener(event);
@@ -209,12 +259,24 @@ export class NativeWorkerBridge {
   }
 
   /** Resolve the full path for a page artifact */
-  resolvePagePath(fileHash: string, pageIndex: number): string | null {
+  resolvePagePath(fileHash: string, pageIndex: number, variant: ArtifactVariant = 'optimized'): string | null {
     const session = this.sessions.get(fileHash);
     if (!session) return null;
 
-    const prefix = path.join(session.outputDir, 'pages', String(pageIndex).padStart(6, '0'));
-    for (const ext of ['.webp', '.jpg', '.jpeg', '.png']) {
+    const manifest = this.readManifest(fileHash);
+    const entry = manifest?.pages?.[pageIndex];
+    if (variant === 'optimized' && typeof entry?.page === 'string') {
+      const p = path.join(session.outputDir, entry.page);
+      if (fs.existsSync(p)) return p;
+    }
+    if (variant === 'original' && typeof entry?.original === 'string') {
+      const p = path.join(session.outputDir, entry.original);
+      if (fs.existsSync(p)) return p;
+    }
+
+    const directory = variant === 'original' ? 'raw' : 'pages';
+    const prefix = path.join(session.outputDir, directory, String(pageIndex).padStart(6, '0'));
+    for (const ext of ['.webp', '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.avif', '.tiff', '.tif']) {
       const p = prefix + ext;
       if (fs.existsSync(p)) return p;
     }
@@ -232,9 +294,43 @@ export class NativeWorkerBridge {
 
   /** Detect backend from file extension */
   private detectBackend(filePath: string): string {
+    const magic = this.detectBackendByMagic(filePath);
+    if (magic) return magic;
+
     const ext = path.extname(filePath).toLowerCase();
     if (ext === '.cbr' || ext === '.rar') return 'rar';
-    // Future: zip, 7z, pdf
+    if (ext === '.cbz' || ext === '.zip') return 'zip';
     return 'rar'; // default for now
+  }
+
+  private detectBackendByMagic(filePath: string): string | null {
+    try {
+      const stat = fs.statSync(filePath);
+      if (!stat.isFile()) return null;
+
+      const fd = fs.openSync(filePath, 'r');
+      try {
+        const header = Buffer.alloc(8);
+        const bytesRead = fs.readSync(fd, header, 0, header.length, 0);
+        if (bytesRead >= 7) {
+          const rar4 = Buffer.from([0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x00]);
+          const rar5 = Buffer.from([0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x01, 0x00]);
+          if (header.subarray(0, 7).equals(rar4) || (bytesRead >= 8 && header.subarray(0, 8).equals(rar5))) {
+            return 'rar';
+          }
+        }
+        if (bytesRead >= 4) {
+          const signature = header.readUInt32LE(0);
+          if (signature === 0x04034b50 || signature === 0x06054b50 || signature === 0x08074b50) {
+            return 'zip';
+          }
+        }
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch {
+      // Fall back to extension.
+    }
+    return null;
   }
 }

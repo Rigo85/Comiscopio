@@ -27,7 +27,7 @@ import { ThumbnailCacheService } from '../../services/thumbnail-cache.service';
               [class.active]="i === currentPage()"
               (click)="pageSelect.emit(i)"
             >
-              @if (thumbnailUrls.get(i); as url) {
+              @if (thumbnailUrls().get(i); as url) {
                 <img [src]="url" [alt]="'Página ' + (i + 1)" loading="lazy" />
               } @else {
                 <div class="thumbnail-placeholder">{{ i + 1 }}</div>
@@ -142,22 +142,27 @@ export class ThumbnailsComponent implements OnChanges, OnDestroy {
   pageSelect = output<number>();
 
   pageIndices = signal<number[]>([]);
-  thumbnailUrls = new Map<number, string>();
+  thumbnailUrls = signal<Map<number, string>>(new Map());
   @ViewChild('list') listRef?: ElementRef<HTMLElement>;
   private unsubscribeThumbnail?: () => void;
 
   constructor(private thumbnailCache: ThumbnailCacheService) {
     this.unsubscribeThumbnail = this.thumbnailCache.subscribe((pageIndex, fileUrl) => {
-      this.thumbnailUrls.set(pageIndex, fileUrl);
+      this.setThumbnailUrl(pageIndex, fileUrl);
     });
   }
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['totalPages'] || changes['fileHash']) {
       this.pageIndices.set(Array.from({ length: this.totalPages() }, (_, i) => i));
-      this.thumbnailUrls.clear();
+      this.thumbnailUrls.set(new Map());
       if (!this.fileHash()) {
         this.thumbnailCache.clear();
+      } else if (this.visible()) {
+        queueMicrotask(() => {
+          this.scrollToCurrentPage();
+          this.loadVisibleThumbnails();
+        });
       }
     }
 
@@ -181,10 +186,18 @@ export class ThumbnailsComponent implements OnChanges, OnDestroy {
 
     // Populate URLs for thumbs that are already ready
     for (let i = 0; i < total; i++) {
-      if (this.thumbnailCache.isReady(i) && !this.thumbnailUrls.has(i)) {
-        this.thumbnailUrls.set(i, this.thumbnailCache.getThumbUrl(i));
+      if (this.thumbnailCache.isReady(i) && !this.thumbnailUrls().has(i)) {
+        this.setThumbnailUrl(i, this.thumbnailCache.getThumbUrl(i));
       }
     }
+  }
+
+  private setThumbnailUrl(pageIndex: number, fileUrl: string): void {
+    this.thumbnailUrls.update((current) => {
+      const next = new Map(current);
+      next.set(pageIndex, fileUrl);
+      return next;
+    });
   }
 
   private scrollToCurrentPage(): void {

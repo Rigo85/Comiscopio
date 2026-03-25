@@ -8,6 +8,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Find libvips via pkg-config
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(VIPS REQUIRED IMPORTED_TARGET vips)
+pkg_check_modules(ARCHIVE REQUIRED IMPORTED_TARGET libarchive)
 
 # Find nlohmann/json
 find_package(nlohmann_json REQUIRED)
@@ -17,6 +18,7 @@ set(SOURCES
     src/app/main.cpp
     src/app/work_queue.cpp
     src/archive/rar_backend.cpp
+    src/archive/zip_backend.cpp
     src/image/image_pipeline.cpp
     src/image/placeholder.cpp
     src/output/manifest.cpp
@@ -32,6 +34,7 @@ target_include_directories(comiscopio-worker PRIVATE
 
 target_link_libraries(comiscopio-worker PRIVATE
     PkgConfig::VIPS
+    PkgConfig::ARCHIVE
     nlohmann_json::nlohmann_json
     unrar
 )

@@ -24,6 +24,12 @@ public:
     virtual int open(const std::string& archivePath, const std::string& rawDir,
                      ProgressCb progressCb = nullptr, void* userData = nullptr) = 0;
 
+    /// Best-effort preview extraction for the sorted page index requested by the UI.
+    /// Implementations may perform a lightweight prepass and emit a single raw file.
+    virtual bool extractPreview(const std::string& archivePath, const std::string& rawDir,
+                                int sortedIndex, std::string& outEntryName,
+                                std::string& outRawRelativePath) = 0;
+
     /// Get the number of image entries
     virtual int entryCount() const = 0;
 

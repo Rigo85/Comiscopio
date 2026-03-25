@@ -65,14 +65,23 @@ function registerProtocolHandlers(): void {
 
       const thumbPath = workerBridge.resolveThumbPath(fileHash, pageIndex);
       if (!thumbPath) {
+        if (isDev && pageIndex === 0) {
+          console.log(`[thumb-protocol] miss page=0 url=${request.url}`);
+        }
         return new Response('Not found', { status: 404 });
       }
 
       const bytes = await fs.promises.readFile(thumbPath);
+      if (isDev && pageIndex === 0) {
+        console.log(`[thumb-protocol] hit page=0 path=${thumbPath} bytes=${bytes.length}`);
+      }
       return new Response(bytes, {
         headers: { 'content-type': 'image/jpeg', 'cache-control': 'no-cache' },
       });
     } catch {
+      if (isDev) {
+        console.log(`[thumb-protocol] error url=${request.url}`);
+      }
       return new Response('Error', { status: 500 });
     }
   });
@@ -83,13 +92,17 @@ function registerProtocolHandlers(): void {
       const url = new URL(request.url);
       const fileHash = url.hostname;
       const pageIndex = parseInt(url.pathname.replace(/^\/+/, ''), 10);
+      const variant = url.searchParams.get('variant') === 'original' ? 'original' : 'optimized';
 
       if (!fileHash || isNaN(pageIndex)) {
         return new Response('Bad request', { status: 400 });
       }
 
-      const pagePath = workerBridge.resolvePagePath(fileHash, pageIndex);
+      const pagePath = workerBridge.resolvePagePath(fileHash, pageIndex, variant);
       if (!pagePath) {
+        if (isDev && pageIndex === 0) {
+          console.log(`[page-protocol] miss page=0 variant=${variant} url=${request.url}`);
+        }
         return new Response('Not found', { status: 404 });
       }
 
@@ -100,6 +113,9 @@ function registerProtocolHandlers(): void {
       };
 
       const bytes = await fs.promises.readFile(pagePath);
+      if (isDev && pageIndex === 0) {
+        console.log(`[page-protocol] hit page=0 variant=${variant} path=${pagePath} bytes=${bytes.length}`);
+      }
       return new Response(bytes, {
         headers: {
           'content-type': mimeTypes[ext] || 'application/octet-stream',
@@ -107,6 +123,9 @@ function registerProtocolHandlers(): void {
         },
       });
     } catch {
+      if (isDev) {
+        console.log(`[page-protocol] error url=${request.url}`);
+      }
       return new Response('Error', { status: 500 });
     }
   });
@@ -153,10 +172,13 @@ function setupIpcHandlers(): void {
       return { fileHash, fileName, filePath, totalPages: existing.totalPages, alreadyOpen: true };
     }
 
-    // Start native worker
-    const session = workerBridge.startSession(fileHash, filePath, (evt) => {
-      if (win.isDestroyed()) return;
-      win.webContents.send(IpcChannels.WORKER_EVENT, { fileHash, ...evt });
+    // Start native worker on the next tick so the renderer has time to
+    // store fileHash/opening state before early preview events arrive.
+    setImmediate(() => {
+      workerBridge.startSession(fileHash, filePath, (evt) => {
+        if (win.isDestroyed()) return;
+        win.webContents.send(IpcChannels.WORKER_EVENT, { fileHash, ...evt });
+      });
     });
 
     return { fileHash, fileName, filePath, totalPages: 0, alreadyOpen: false };
@@ -168,6 +190,10 @@ function setupIpcHandlers(): void {
 
   ipcMain.on(IpcChannels.WORKER_CLOSE, (_event, fileHash: string) => {
     workerBridge.closeSession(fileHash);
+  });
+
+  ipcMain.handle(IpcChannels.GET_WORKER_MANIFEST, async (_event, fileHash: string) => {
+    return workerBridge.readManifest(fileHash);
   });
 
   // --- Reading progress ---

@@ -9,6 +9,7 @@ struct ImageConfig {
     int thumbQuality = 60;
     int readerMaxDimension = 2400;
     int readerQuality = 82;
+    std::string readerFormat = "jpeg";
 };
 
 struct ImageResult {

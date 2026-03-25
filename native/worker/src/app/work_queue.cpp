@@ -22,36 +22,58 @@ WorkQueue::WorkQueue(int totalPages, const std::string& outputDir)
 void WorkQueue::focus(int centerPage, int windowBefore, int windowAfter) {
     int start = std::max(0, centerPage - windowBefore);
     int end = std::min(totalPages - 1, centerPage + windowAfter);
+
+    if (centerPage == lastFocusPage && start == lastFocusStart && end == lastFocusEnd) {
+        fprintf(stderr, "[queue] focus(%d) ignored (same window %d-%d)\n", centerPage, start, end);
+        return;
+    }
+
     fprintf(stderr, "[queue] focus(%d) window %d-%d, qBefore: %d, donePages: %d, doneThumb: %d\n",
         centerPage, start, end, (int)priorityQueue.size(),
         (int)donePages.size(), (int)doneThumbOnly.size());
 
-    // Remove these pages from wherever they are in the priority queue
-    std::set<int> windowSet;
-    for (int i = start; i <= end; i++) {
-        windowSet.insert(i);
+    if (lastFocusPage >= 0 && std::abs(centerPage - lastFocusPage) > kFarJumpThreshold) {
+        priorityQueue.clear();
+        fprintf(stderr, "[queue] pruned stale priority queue on far jump %d -> %d\n", lastFocusPage, centerPage);
     }
 
-    // Remove existing entries that are in the new window
-    priorityQueue.erase(
-        std::remove_if(priorityQueue.begin(), priorityQueue.end(),
-            [&windowSet](int p) { return windowSet.count(p) > 0; }),
-        priorityQueue.end()
-    );
+    const bool hadPreviousWindow = lastFocusStart >= 0 && lastFocusEnd >= 0;
+    const bool overlapsPreviousWindow =
+        hadPreviousWindow && !(end < lastFocusStart || start > lastFocusEnd);
 
-    // Insert window at the front, center page first
+    // Build the active priority window as center first, then nearest neighbors.
+    // For nearby navigation we replace the active window instead of accumulating
+    // overlapping windows, which keeps the queue small during sequential moves.
     std::deque<int> newFront;
     newFront.push_back(centerPage);
-    for (int i = start; i <= end; i++) {
-        if (i != centerPage) {
-            newFront.push_back(i);
+
+    for (int distance = 1; distance <= std::max(centerPage - start, end - centerPage); distance++) {
+        int right = centerPage + distance;
+        if (right <= end) {
+            newFront.push_back(right);
+        }
+
+        int left = centerPage - distance;
+        if (left >= start) {
+            newFront.push_back(left);
         }
     }
 
-    // Prepend to priority queue
-    for (auto it = newFront.rbegin(); it != newFront.rend(); ++it) {
-        priorityQueue.push_front(*it);
+    priorityQueue.clear();
+    for (int page : newFront) {
+        priorityQueue.push_back(page);
     }
+
+    if (overlapsPreviousWindow && centerPage != lastFocusPage) {
+        fprintf(stderr,
+            "[queue] merged nearby focus into active window %d-%d -> %d-%d\n",
+            lastFocusStart, lastFocusEnd, start, end);
+    }
+
+    trimPriorityQueue();
+    lastFocusPage = centerPage;
+    lastFocusStart = start;
+    lastFocusEnd = end;
 
     fprintf(stderr, "[queue] after focus(%d): qSize=%d, front=%d\n",
         centerPage, (int)priorityQueue.size(),
@@ -136,4 +158,18 @@ std::string WorkQueue::formatIndex(int index) const {
     char buf[16];
     snprintf(buf, sizeof(buf), "%06d", index);
     return buf;
+}
+
+void WorkQueue::trimPriorityQueue() {
+    std::set<int> seen;
+    std::deque<int> trimmed;
+
+    for (int page : priorityQueue) {
+        if (seen.count(page) > 0) continue;
+        seen.insert(page);
+        trimmed.push_back(page);
+        if ((int)trimmed.size() >= kMaxPriorityItems) break;
+    }
+
+    priorityQueue = std::move(trimmed);
 }

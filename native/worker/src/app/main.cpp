@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -26,6 +27,7 @@ namespace fs = std::filesystem;
 using json = nlohmann::json;
 
 extern std::unique_ptr<ArchiveBackend> createRarBackend();
+extern std::unique_ptr<ArchiveBackend> createZipBackend();
 
 static std::string getExtension(const std::string& filename) {
     auto pos = filename.rfind('.');
@@ -42,10 +44,12 @@ struct CliArgs {
     std::string input;
     std::string output;
     std::string backend = "rar";
+    std::string readerFormat = "jpeg";
     int thumbWidth = 180;
     int thumbQuality = 60;
     int readerMaxDimension = 2400;
     int readerQuality = 82;
+    int vipsConcurrency = 1;
     int windowBefore = 2;
     int windowAfter = 3;
 };
@@ -64,10 +68,12 @@ static bool parseArgs(int argc, char* argv[], CliArgs& args) {
         if (arg == "--input" && i + 1 < argc) args.input = argv[++i];
         else if (arg == "--output" && i + 1 < argc) args.output = argv[++i];
         else if (arg == "--backend" && i + 1 < argc) args.backend = argv[++i];
+        else if (arg == "--reader-format" && i + 1 < argc) args.readerFormat = argv[++i];
         else if (arg == "--thumb-width" && i + 1 < argc) args.thumbWidth = std::atoi(argv[++i]);
         else if (arg == "--thumb-quality" && i + 1 < argc) args.thumbQuality = std::atoi(argv[++i]);
         else if (arg == "--reader-max-dimension" && i + 1 < argc) args.readerMaxDimension = std::atoi(argv[++i]);
         else if (arg == "--reader-quality" && i + 1 < argc) args.readerQuality = std::atoi(argv[++i]);
+        else if (arg == "--vips-concurrency" && i + 1 < argc) args.vipsConcurrency = std::atoi(argv[++i]);
         else if (arg == "--window-before" && i + 1 < argc) args.windowBefore = std::atoi(argv[++i]);
         else if (arg == "--window-after" && i + 1 < argc) args.windowAfter = std::atoi(argv[++i]);
         else if (arg == "--help" || arg == "-h") { printUsage(argv[0]); return false; }
@@ -125,8 +131,8 @@ static void extractionProgress(int current, int total, const std::string& name, 
     fprintf(stdout, "%s\n", j.dump().c_str());
     fflush(stdout);
 
-    if (current % 50 == 0 || current == total - 1) {
-        fprintf(stderr, "[worker] Extracting %d/%d: %s\n", current + 1, total, name.c_str());
+    if (current % 50 == 0) {
+        fprintf(stderr, "[worker] Extracting %d: %s\n", current + 1, name.c_str());
     }
 }
 
@@ -138,8 +144,12 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "Error: input not found: %s\n", args.input.c_str());
         return 1;
     }
-    if (args.backend != "rar") {
+    if (args.backend != "rar" && args.backend != "zip") {
         fprintf(stderr, "Error: unsupported backend '%s'\n", args.backend.c_str());
+        return 1;
+    }
+    if (args.readerFormat != "webp" && args.readerFormat != "jpeg") {
+        fprintf(stderr, "Error: unsupported reader format '%s'\n", args.readerFormat.c_str());
         return 1;
     }
 
@@ -150,6 +160,9 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "Error: vips init failed\n");
         return 1;
     }
+    if (args.vipsConcurrency > 0) {
+        vips_concurrency_set(args.vipsConcurrency);
+    }
 
     // Clean and create output
     if (fs::exists(args.output)) fs::remove_all(args.output);
@@ -157,10 +170,185 @@ int main(int argc, char* argv[]) {
     fs::create_directories(args.output + "/pages");
     fs::create_directories(args.output + "/raw");
 
+    // Config
+    ImageConfig config;
+    config.thumbWidth = args.thumbWidth;
+    config.thumbQuality = args.thumbQuality;
+    config.readerMaxDimension = args.readerMaxDimension;
+    config.readerQuality = args.readerQuality;
+    config.readerFormat = args.readerFormat;
+
+    // Manifest
+    json manifestConfig;
+    manifestConfig["thumbWidth"] = config.thumbWidth;
+    manifestConfig["thumbQuality"] = config.thumbQuality;
+    manifestConfig["readerMaxDimension"] = config.readerMaxDimension;
+    manifestConfig["readerQuality"] = config.readerQuality;
+    manifestConfig["readerFormat"] = config.readerFormat;
+    manifestConfig["vipsConcurrency"] = args.vipsConcurrency;
+    Manifest manifest(args.output, args.input, args.backend, manifestConfig);
+
+    double totalDecodeMs = 0.0;
+    double totalThumbMs = 0.0;
+    double totalPageMs = 0.0;
+    double totalOptimizedPageMs = 0.0;
+    int optimizedPageCount = 0;
+    double totalBackgroundThumbMs = 0.0;
+    int backgroundThumbCount = 0;
+
+    auto processPageAtIndex = [&](ArchiveBackend& activeBackend, int pageIndex) -> bool {
+        std::vector<uint8_t> entryData;
+        std::string entryName = activeBackend.entryName(pageIndex);
+        if (entryName.empty()) return false;
+
+        std::string idx = formatIndex(pageIndex);
+        std::string ext = getExtension(entryName);
+        std::string originalFile = ext.empty()
+            ? ("raw/" + idx + ".bin")
+            : ("raw/" + idx + ext);
+
+        if (!activeBackend.getEntry(pageIndex, entryData) || entryData.empty()) {
+            std::string thumbFile = "thumbs/" + idx + ".jpg";
+            std::string pageFile = "pages/" + idx + ".webp";
+            generatePlaceholder(args.output + "/" + thumbFile, args.output + "/" + pageFile,
+                config.thumbWidth, config.thumbQuality, config.readerQuality);
+            manifest.addErrorPage(pageIndex, entryName, "Failed to read from raw", thumbFile, pageFile, originalFile);
+            emitError(pageIndex, "Failed to read from raw");
+            manifest.write();
+            return false;
+        }
+
+        auto pageStart = std::chrono::steady_clock::now();
+        std::string thumbFile = "thumbs/" + idx + ".jpg";
+        int maxDim = 0;
+        {
+            VipsImage* probe = vips_image_new_from_buffer(entryData.data(), entryData.size(), "", nullptr);
+            if (probe) {
+                maxDim = std::max(vips_image_get_width(probe), vips_image_get_height(probe));
+                g_object_unref(probe);
+            }
+        }
+
+        bool willBypass = (maxDim > 0 && maxDim <= config.readerMaxDimension);
+        std::string optimizedExt = config.readerFormat == "jpeg" ? ".jpg" : ".webp";
+        std::string pageFile = willBypass ? ("pages/" + idx + ext) : ("pages/" + idx + optimizedExt);
+        auto result = processImage(entryData, entryName, config,
+            args.output + "/" + thumbFile, args.output + "/" + pageFile);
+        auto pageEnd = std::chrono::steady_clock::now();
+        double pageMs = std::chrono::duration<double, std::milli>(pageEnd - pageStart).count();
+
+        if (!result.ok) {
+            std::string errPageFile = "pages/" + idx + ".webp";
+            generatePlaceholder(args.output + "/" + thumbFile, args.output + "/" + errPageFile,
+                config.thumbWidth, config.thumbQuality, config.readerQuality);
+            manifest.addErrorPage(pageIndex, entryName, result.errorMessage, thumbFile, errPageFile, originalFile);
+            emitError(pageIndex, result.errorMessage);
+            manifest.write();
+            return false;
+        }
+
+        manifest.addPage(pageIndex, entryName, result, thumbFile, pageFile, originalFile);
+        manifest.write();
+        emitReady(pageIndex, pageFile, thumbFile, pageMs);
+        totalDecodeMs += result.decodeMs;
+        totalThumbMs += result.thumbMs;
+        totalPageMs += result.pageMs;
+        totalOptimizedPageMs += pageMs;
+        optimizedPageCount++;
+        fprintf(stderr, "[worker] page %d: %.1fms (decode=%.1f thumb=%.1f page=%.1f) %s%s\n",
+            pageIndex, pageMs, result.decodeMs, result.thumbMs, result.pageMs,
+            result.bypassed ? "BYPASS " : "", entryName.c_str());
+        return true;
+    };
+
+    auto processPreviewFromRaw = [&](const std::string& entryName, const std::string& originalFile) -> bool {
+        std::string idx = formatIndex(0);
+        std::string ext = getExtension(entryName);
+        std::string rawPath = args.output + "/" + originalFile;
+
+        std::vector<uint8_t> entryData;
+        if (!fs::exists(rawPath)) return false;
+        const auto fileSize = fs::file_size(rawPath);
+        entryData.resize(fileSize);
+        std::ifstream in(rawPath, std::ios::binary);
+        if (!in) return false;
+        in.read(reinterpret_cast<char*>(entryData.data()), static_cast<std::streamsize>(fileSize));
+
+        auto pageStart = std::chrono::steady_clock::now();
+        std::string thumbFile = "thumbs/" + idx + ".jpg";
+        int maxDim = 0;
+        {
+            VipsImage* probe = vips_image_new_from_buffer(entryData.data(), entryData.size(), "", nullptr);
+            if (probe) {
+                maxDim = std::max(vips_image_get_width(probe), vips_image_get_height(probe));
+                g_object_unref(probe);
+            }
+        }
+
+        bool willBypass = (maxDim > 0 && maxDim <= config.readerMaxDimension);
+        std::string optimizedExt = config.readerFormat == "jpeg" ? ".jpg" : ".webp";
+        std::string pageFile = willBypass ? ("pages/" + idx + ext) : ("pages/" + idx + optimizedExt);
+        auto result = processImage(entryData, entryName, config,
+            args.output + "/" + thumbFile, args.output + "/" + pageFile);
+        auto pageEnd = std::chrono::steady_clock::now();
+        double pageMs = std::chrono::duration<double, std::milli>(pageEnd - pageStart).count();
+
+        if (!result.ok) {
+            std::string errPageFile = "pages/" + idx + ".webp";
+            generatePlaceholder(args.output + "/" + thumbFile, args.output + "/" + errPageFile,
+                config.thumbWidth, config.thumbQuality, config.readerQuality);
+            manifest.addErrorPage(0, entryName, result.errorMessage, thumbFile, errPageFile, originalFile);
+            emitError(0, result.errorMessage);
+            manifest.write();
+            return false;
+        }
+
+        manifest.addPage(0, entryName, result, thumbFile, pageFile, originalFile);
+        manifest.write();
+        emitReady(0, pageFile, thumbFile, pageMs);
+        totalDecodeMs += result.decodeMs;
+        totalThumbMs += result.thumbMs;
+        totalPageMs += result.pageMs;
+        totalOptimizedPageMs += pageMs;
+        optimizedPageCount++;
+        fprintf(stderr, "[worker] preview page 0: %.1fms (decode=%.1f thumb=%.1f page=%.1f) %s%s\n",
+            pageMs, result.decodeMs, result.thumbMs, result.pageMs,
+            result.bypassed ? "BYPASS " : "", entryName.c_str());
+        return true;
+    };
+
     auto totalStart = std::chrono::steady_clock::now();
 
+    // === Phase 0: Fast preview for page 0 ===
+    bool previewReady = false;
+    bool previewProcessed = false;
+    std::string previewEntryName;
+    std::string previewRawPath;
+    {
+        std::unique_ptr<ArchiveBackend> previewBackend;
+        if (args.backend == "rar") previewBackend = createRarBackend();
+        else if (args.backend == "zip") previewBackend = createZipBackend();
+
+        auto previewStart = std::chrono::steady_clock::now();
+        try {
+            previewReady = previewBackend->extractPreview(args.input, args.output + "/raw", 0, previewEntryName, previewRawPath);
+        } catch (const std::exception& e) {
+            fprintf(stderr, "[worker] Preview extraction failed: %s\n", e.what());
+            previewReady = false;
+        }
+        auto previewEnd = std::chrono::steady_clock::now();
+        double previewMs = std::chrono::duration<double, std::milli>(previewEnd - previewStart).count();
+        if (previewReady) {
+            fprintf(stderr, "[worker] Preview ready in %.1fms: %s\n", previewMs, previewEntryName.c_str());
+            previewProcessed = processPreviewFromRaw(previewEntryName, previewRawPath);
+            previewBackend->close();
+        }
+    }
+
     // === Phase 1: Extract all entries to raw/ (single sequential scan) ===
-    auto backend = createRarBackend();
+    std::unique_ptr<ArchiveBackend> backend;
+    if (args.backend == "rar") backend = createRarBackend();
+    else if (args.backend == "zip") backend = createZipBackend();
     int totalEntries;
 
     fprintf(stderr, "[worker] Phase 1: Extracting archive to raw/...\n");
@@ -180,6 +368,8 @@ int main(int argc, char* argv[]) {
     fprintf(stderr, "[worker] Phase 1 complete: %d entries in %.1fms (%.1fms/entry)\n",
         totalEntries, extractMs, totalEntries > 0 ? extractMs / totalEntries : 0);
 
+    int processedCount = previewProcessed ? 1 : 0;
+
     // Emit archive info
     {
         json j;
@@ -190,28 +380,14 @@ int main(int argc, char* argv[]) {
         fflush(stdout);
     }
 
-    // Config
-    ImageConfig config;
-    config.thumbWidth = args.thumbWidth;
-    config.thumbQuality = args.thumbQuality;
-    config.readerMaxDimension = args.readerMaxDimension;
-    config.readerQuality = args.readerQuality;
-
-    // Manifest
-    json manifestConfig;
-    manifestConfig["thumbWidth"] = config.thumbWidth;
-    manifestConfig["thumbQuality"] = config.thumbQuality;
-    manifestConfig["readerMaxDimension"] = config.readerMaxDimension;
-    manifestConfig["readerQuality"] = config.readerQuality;
-    Manifest manifest(args.output, args.input, args.backend, manifestConfig);
-
     // Work queue
     WorkQueue queue(totalEntries, args.output);
+    if (processedCount > 0) {
+        queue.markDone(0);
+    }
 
     // === Phase 2: Process pages on demand ===
     fprintf(stderr, "[worker] Phase 2: Ready for focus commands\n");
-
-    int processedCount = 0;
 
     while (!cancelled) {
         // Check stdin
@@ -240,71 +416,26 @@ int main(int argc, char* argv[]) {
             pfd.events = POLLIN;
             poll(&pfd, 1, 100);
 #endif
-            if (queue.backgroundProgress() >= totalEntries && queue.priorityRemaining() == 0)
-                break;
             continue;
         }
-
-        auto pageStart = std::chrono::steady_clock::now();
-
-        // Read from raw/ (instant disk access)
-        std::vector<uint8_t> entryData;
-        std::string entryName = backend->entryName(pageIndex);
-
-        if (!backend->getEntry(pageIndex, entryData) || entryData.empty()) {
-            // Entry failed during extraction
-            std::string idx = formatIndex(pageIndex);
-            std::string thumbFile = "thumbs/" + idx + ".jpg";
-            std::string pageFile = "pages/" + idx + ".webp";
-            generatePlaceholder(args.output + "/" + thumbFile, args.output + "/" + pageFile,
-                config.thumbWidth, config.thumbQuality, config.readerQuality);
-            manifest.addErrorPage(pageIndex, entryName, "Failed to read from raw", thumbFile, pageFile);
-            emitError(pageIndex, "Failed to read from raw");
-            queue.markDone(pageIndex);
-            processedCount++;
-            continue;
-        }
-
-        std::string idx = formatIndex(pageIndex);
-        std::string thumbFile = "thumbs/" + idx + ".jpg";
 
         if (needsPage) {
-            // Full: thumb + page
-            int maxDim = 0;
-            {
-                VipsImage* probe = vips_image_new_from_buffer(entryData.data(), entryData.size(), "", nullptr);
-                if (probe) {
-                    maxDim = std::max(vips_image_get_width(probe), vips_image_get_height(probe));
-                    g_object_unref(probe);
-                }
-            }
-
-            bool willBypass = (maxDim > 0 && maxDim <= config.readerMaxDimension);
-            std::string ext = getExtension(entryName);
-            std::string pageFile = willBypass ? ("pages/" + idx + ext) : ("pages/" + idx + ".webp");
-
-            auto result = processImage(entryData, entryName, config,
-                args.output + "/" + thumbFile, args.output + "/" + pageFile);
-
-            auto pageEnd = std::chrono::steady_clock::now();
-            double pageMs = std::chrono::duration<double, std::milli>(pageEnd - pageStart).count();
-
-            if (!result.ok) {
-                std::string errPageFile = "pages/" + idx + ".webp";
-                generatePlaceholder(args.output + "/" + thumbFile, args.output + "/" + errPageFile,
-                    config.thumbWidth, config.thumbQuality, config.readerQuality);
-                manifest.addErrorPage(pageIndex, entryName, result.errorMessage, thumbFile, errPageFile);
-                emitError(pageIndex, result.errorMessage);
-            } else {
-                manifest.addPage(pageIndex, entryName, result, thumbFile, pageFile);
-                emitReady(pageIndex, pageFile, thumbFile, pageMs);
-                fprintf(stderr, "[worker] page %d: %.1fms (decode=%.1f thumb=%.1f page=%.1f) %s%s\n",
-                    pageIndex, pageMs, result.decodeMs, result.thumbMs, result.pageMs,
-                    result.bypassed ? "BYPASS " : "", entryName.c_str());
+            if (processPageAtIndex(*backend, pageIndex)) {
+                processedCount++;
             }
             queue.markDone(pageIndex);
-        } else {
+        } else if (pageIndex != 0 || processedCount == 0) {
             // Background: thumb only
+            auto thumbStart = std::chrono::steady_clock::now();
+            std::vector<uint8_t> entryData;
+            std::string entryName = backend->entryName(pageIndex);
+            std::string idx = formatIndex(pageIndex);
+            std::string thumbFile = "thumbs/" + idx + ".jpg";
+
+            if (!backend->getEntry(pageIndex, entryData) || entryData.empty()) {
+                queue.markThumbOnly(pageIndex);
+                continue;
+            }
             VipsImage* thumb = nullptr;
             if (vips_thumbnail_buffer(
                     const_cast<void*>(static_cast<const void*>(entryData.data())),
@@ -315,14 +446,12 @@ int main(int argc, char* argv[]) {
                     "Q", config.thumbQuality, nullptr);
                 g_object_unref(thumb);
             }
+            auto thumbEnd = std::chrono::steady_clock::now();
+            totalBackgroundThumbMs += std::chrono::duration<double, std::milli>(thumbEnd - thumbStart).count();
+            backgroundThumbCount++;
             emitProgress(pageIndex, totalEntries, "thumb", thumbFile);
             queue.markThumbOnly(pageIndex);
         }
-
-        manifest.write();
-        processedCount++;
-        entryData.clear();
-        entryData.shrink_to_fit();
     }
 
     auto totalEnd = std::chrono::steady_clock::now();
@@ -335,9 +464,20 @@ int main(int argc, char* argv[]) {
 
     fprintf(stderr, "[worker] %s: %d pages processed in %.1fms (extraction: %.1fms)\n",
         cancelled ? "Cancelled" : "Complete", processedCount, totalMs, extractMs);
+    fprintf(stderr,
+        "[worker] timing summary: optimized=%d pages in %.1fms (avg=%.1fms/page), "
+        "decode=%.1fms, thumb=%.1fms, page=%.1fms, bgThumb=%d in %.1fms (avg=%.1fms/thumb)\n",
+        optimizedPageCount,
+        totalOptimizedPageMs,
+        optimizedPageCount > 0 ? totalOptimizedPageMs / optimizedPageCount : 0.0,
+        totalDecodeMs,
+        totalThumbMs,
+        totalPageMs,
+        backgroundThumbCount,
+        totalBackgroundThumbMs,
+        backgroundThumbCount > 0 ? totalBackgroundThumbMs / backgroundThumbCount : 0.0);
 
     backend->close();
     vips_shutdown();
     return cancelled ? 1 : 0;
 }
-

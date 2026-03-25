@@ -5,6 +5,7 @@ const validInvokeChannels = new Set([
   IpcChannels.OPEN_FILE_DIALOG,
   IpcChannels.OPEN_FOLDER_DIALOG,
   IpcChannels.WORKER_START,
+  IpcChannels.GET_WORKER_MANIFEST,
   IpcChannels.SAVE_PROGRESS,
   IpcChannels.GET_PROGRESS,
   IpcChannels.GET_RECENT_FILES,

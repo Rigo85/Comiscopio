@@ -1,6 +1,6 @@
 import { Component, OnInit, OnDestroy, HostListener, signal, computed, ElementRef, ViewChild } from '@angular/core';
 import { ElectronService, WindowState } from '../../services/electron.service';
-import { PageCacheService, CachedPage } from '../../services/page-cache.service';
+import { PageCacheService, CachedPage, PageArtifactSource } from '../../services/page-cache.service';
 import { ThumbnailCacheService } from '../../services/thumbnail-cache.service';
 import { ReaderStateService } from '../../services/reader-state.service';
 import { ZoomPanService } from '../../services/zoom-pan.service';
@@ -111,6 +111,7 @@ interface FileState {
               [class]="fitClass()"
               [src]="currentPageUrl()"
               [alt]="'Página ' + (currentPageIndex() + 1)"
+              (error)="onCurrentImageError()"
               draggable="false"
             />
           }
@@ -120,6 +121,7 @@ interface FileState {
               [class]="fitClass()"
               [src]="secondPageUrl()"
               [alt]="'Página ' + (currentPageIndex() + 2)"
+              (error)="onSecondImageError()"
               draggable="false"
             />
           }
@@ -178,6 +180,7 @@ interface FileState {
       [isAlwaysOnTop]="isAlwaysOnTop()"
       [isFullscreen]="isFullscreen()"
       [showThumbnails]="showThumbnails()"
+      [pageSource]="pageSource()"
       (action)="onMenuAction($event)"
       #contextMenu
     />
@@ -302,17 +305,22 @@ export class ViewerComponent implements OnInit, OnDestroy {
   error = signal<string | null>(null);
   isDragOver = signal(false);
   showGoToPage = signal(false);
-  showThumbnails = signal(false);
+  showThumbnails = signal(true);
   zenMode = signal(false);
   isAlwaysOnTop = signal(false);
   isFullscreen = signal(false);
   recentFiles = signal<RecentFile[]>([]);
+  pageSource = signal<PageArtifactSource>('optimized');
 
   private currentPageMeta: CachedPage | null = null;
   private isPanning = false;
   private lastPanX = 0;
   private lastPanY = 0;
   private openingFileHash: string | null = null;
+  private previewInitializedHash: string | null = null;
+  private currentImageRetryKey: string | null = null;
+  private secondImageRetryKey: string | null = null;
+  private previewProbeTimer: ReturnType<typeof setTimeout> | null = null;
 
   isDoublePage = computed(() => {
     return this.readerState.pageLayout() === 'double'
@@ -384,32 +392,39 @@ export class ViewerComponent implements OnInit, OnDestroy {
 
     switch (event.type) {
       case 'extracting':
-        this.loadingMessage.set(`Extrayendo ${event.current + 1}/${event.total}...`);
-        break;
-
-      case 'archive':
-        // Extraction done — file is ready
-        const state = this.fileState();
-        if (state && state.fileHash === hash) {
-          state.totalPages = event.totalPages;
+        if (event.total > 0) {
+          this.loadingMessage.set(`Extrayendo ${event.current + 1}/${event.total}...`);
         } else {
-          // File was being opened
-          this.completeOpen(hash, event.totalPages);
+          this.loadingMessage.set(`Extrayendo... (${event.current + 1} páginas)`);
         }
         break;
 
+      case 'archive':
+        void this.refreshManifest(hash);
+        queueMicrotask(() => {
+          void this.completeOpen(hash, event.totalPages);
+        });
+        break;
+
       case 'ready':
+        void this.refreshManifest(hash);
         // A page is available on disk
         this.pageCache.markReady(event.page);
         this.thumbnailCache.markReady(event.page);
 
         // If this is the page we're waiting for, show it
         if (this.currentPageIndex() === event.page && this.fileState()) {
-          this.currentPageUrl.set(this.pageCache.getPageUrl(event.page));
+          this.currentPageUrl.set(this.buildPageUrl(event.page, this.pageSource()));
+          this.currentPageMeta = this.pageCache.getPageMeta(event.page, this.pageSource());
+          this.currentImageRetryKey = null;
+          this.loadSecondPage(event.page);
+        } else if (this.loading() && this.openingFileHash === hash && event.page === 0) {
+          void this.initializePreview(hash, event.page);
         }
         break;
 
       case 'progress':
+        void this.refreshManifest(hash);
         // Background thumb ready
         if (event.stage === 'thumb') {
           this.thumbnailCache.markReady(event.page);
@@ -435,8 +450,17 @@ export class ViewerComponent implements OnInit, OnDestroy {
 
     const settings = await this.electron.getSettings();
     this.readerState.applySettings(settings);
-    this.pageCache.init(fileHash, totalPages, settings.slidingWindowSize, settings.slidingWindowSize);
-    this.thumbnailCache.init(fileHash);
+    if (this.previewInitializedHash !== fileHash) {
+      this.pageCache.init(fileHash, totalPages, settings.slidingWindowSize, settings.slidingWindowSize);
+      this.thumbnailCache.init(fileHash);
+    } else {
+      this.pageCache.init(fileHash, totalPages, this.pageCache.windowBefore, this.pageCache.windowAfter);
+      this.thumbnailCache.init(fileHash);
+      this.pageCache.markReady(0);
+      this.thumbnailCache.markReady(0);
+      this.previewInitializedHash = null;
+    }
+    await this.refreshManifest(fileHash);
 
     this.fileState.update(s => s ? { ...s, totalPages } : s);
 
@@ -467,6 +491,10 @@ export class ViewerComponent implements OnInit, OnDestroy {
         this.readerState.pageLayout.set(action.value);
         this.refreshCurrentPage();
         this.persistSettings();
+        return;
+      case 'page-source':
+        this.pageSource.set(action.value);
+        this.refreshCurrentPage();
         return;
       case 'always-on-top':
         this.electron.toggleAlwaysOnTop();
@@ -503,7 +531,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
     const entering = !this.zenMode();
     this.zenMode.set(entering);
     if (entering) {
-      this.showThumbnails.set(false);
+      this.showThumbnails.set(true);
       if (!this.isFullscreen()) this.electron.toggleFullscreen();
     } else {
       if (this.isFullscreen()) this.electron.toggleFullscreen();
@@ -652,6 +680,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
     if (this.openingFileHash) {
       this.electron.workerClose(this.openingFileHash);
       this.openingFileHash = null;
+      this.clearPreviewProbe();
       this.loading.set(false);
       this.loadingMessage.set('Abriendo archivo...');
     }
@@ -675,6 +704,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
         filePath: result.filePath,
         totalPages: result.totalPages || 0,
       });
+      this.schedulePreviewProbe(result.fileHash);
 
       if (result.alreadyOpen) {
         // Already extracted — go straight to reading
@@ -719,15 +749,14 @@ export class ViewerComponent implements OnInit, OnDestroy {
     this.navigating = true;
 
     try {
-      const url = this.pageCache.navigateTo(index);
-      if (url) {
-        this.currentPageUrl.set(url);
-        this.currentPageIndex.set(index);
-        this.currentPageMeta = this.pageCache.getPageMeta(index);
-        this.zoomPan.resetOnPageChange();
-        this.loadSecondPage(index);
-        this.saveProgress(s, index);
-      }
+      this.pageCache.navigateTo(index, this.pageSource());
+      this.currentPageIndex.set(index);
+      this.currentPageMeta = this.pageCache.getPageMeta(index, this.pageSource());
+      this.currentImageRetryKey = null;
+      this.currentPageUrl.set(this.pageCache.isReady(index) ? this.buildPageUrl(index, this.pageSource()) : null);
+      this.zoomPan.resetOnPageChange();
+      this.loadSecondPage(index);
+      this.saveProgress(s, index);
     } finally {
       this.navigating = false;
     }
@@ -750,12 +779,15 @@ export class ViewerComponent implements OnInit, OnDestroy {
     const secondIndex = firstIndex + 1;
     if (secondIndex >= s.totalPages) { this.secondPageUrl.set(null); return; }
 
-    const secondMeta = this.pageCache.getPageMeta(secondIndex);
+    const secondMeta = this.pageCache.getPageMeta(secondIndex, this.pageSource());
     if (secondMeta && this.readerState.isSpread(secondMeta.width, secondMeta.height)) {
       this.secondPageUrl.set(null);
       return;
     }
-    this.secondPageUrl.set(this.pageCache.getPageUrl(secondIndex));
+    this.secondImageRetryKey = null;
+    this.secondPageUrl.set(this.pageCache.isReady(secondIndex)
+      ? this.buildPageUrl(secondIndex, this.pageSource())
+      : null);
   }
 
   private getNavigationStep(): number {
@@ -773,11 +805,16 @@ export class ViewerComponent implements OnInit, OnDestroy {
     this.thumbnailCache.clear();
     if (s) {
       this.pageCache.clear();
-      this.currentPageUrl.set(null);
-      this.secondPageUrl.set(null);
+    this.currentPageUrl.set(null);
+    this.secondPageUrl.set(null);
       this.currentPageIndex.set(0);
       this.currentPageMeta = null;
       this.fileState.set(null);
+      this.pageSource.set('optimized');
+      this.previewInitializedHash = null;
+      this.currentImageRetryKey = null;
+      this.secondImageRetryKey = null;
+      this.clearPreviewProbe();
       this.zoomPan.resetAll();
       this.showThumbnails.set(false);
       this.electron.workerClose(s.fileHash);
@@ -812,5 +849,97 @@ export class ViewerComponent implements OnInit, OnDestroy {
       fitMode: this.readerState.fitMode(),
       pageLayout: this.readerState.pageLayout(),
     });
+  }
+
+  private async refreshManifest(fileHash: string): Promise<void> {
+    try {
+      const manifest = await this.electron.getWorkerManifest(fileHash);
+      if (manifest?.pages) {
+        this.pageCache.updateManifest(manifest.pages);
+      }
+    } catch {
+      // Ignore transient read/write races while worker updates manifest.
+    }
+  }
+
+  private async initializePreview(fileHash: string, pageIndex: number): Promise<void> {
+    if (this.previewInitializedHash === fileHash) return;
+
+    const settings = await this.electron.getSettings();
+    this.readerState.applySettings(settings);
+    this.pageCache.init(fileHash, Math.max(pageIndex + 1, 1), settings.slidingWindowSize, settings.slidingWindowSize);
+    this.thumbnailCache.init(fileHash);
+    this.pageCache.markReady(pageIndex);
+    this.thumbnailCache.markReady(pageIndex);
+    await this.refreshManifest(fileHash);
+
+    const previewUrl = this.buildPageUrl(pageIndex, this.pageSource());
+    this.currentPageUrl.set(previewUrl);
+    this.currentPageIndex.set(pageIndex);
+    this.currentPageMeta = this.pageCache.getPageMeta(pageIndex, this.pageSource());
+    this.secondPageUrl.set(null);
+    this.previewInitializedHash = fileHash;
+    this.clearPreviewProbe();
+    this.fileState.update(s => s ? { ...s, totalPages: Math.max(s.totalPages, pageIndex + 1) } : s);
+  }
+
+  private schedulePreviewProbe(fileHash: string, attempt = 0): void {
+    this.clearPreviewProbe();
+    if (!this.loading() || this.openingFileHash !== fileHash || this.previewInitializedHash === fileHash) {
+      return;
+    }
+
+    this.previewProbeTimer = setTimeout(async () => {
+      if (!this.loading() || this.openingFileHash !== fileHash || this.previewInitializedHash === fileHash) {
+        return;
+      }
+
+      try {
+        const manifest = await this.electron.getWorkerManifest(fileHash);
+        const page0 = manifest?.pages?.[0];
+        if (page0?.page) {
+          await this.initializePreview(fileHash, 0);
+          return;
+        }
+      } catch {
+        // Ignore manifest races while the worker writes preview output.
+      }
+
+      if (attempt < 40) {
+        this.schedulePreviewProbe(fileHash, attempt + 1);
+      }
+    }, attempt === 0 ? 0 : 100);
+  }
+
+  private clearPreviewProbe(): void {
+    if (this.previewProbeTimer) {
+      clearTimeout(this.previewProbeTimer);
+      this.previewProbeTimer = null;
+    }
+  }
+
+  private buildPageUrl(pageIndex: number, source: PageArtifactSource, retry = 0): string {
+    const base = this.pageCache.getPageUrl(pageIndex, source);
+    return retry > 0 ? `${base}&view=${retry}` : base;
+  }
+
+  onCurrentImageError(): void {
+    const pageIndex = this.currentPageIndex();
+    const key = `${pageIndex}:${this.pageSource()}`;
+    if (this.currentImageRetryKey === key || !this.pageCache.isReady(pageIndex)) {
+      return;
+    }
+    this.currentImageRetryKey = key;
+    this.currentPageUrl.set(this.buildPageUrl(pageIndex, this.pageSource(), 1));
+  }
+
+  onSecondImageError(): void {
+    const pageIndex = this.currentPageIndex() + 1;
+    const key = `${pageIndex}:${this.pageSource()}`;
+    if (this.secondImageRetryKey === key || !this.pageCache.isReady(pageIndex)) {
+      return;
+    }
+    this.secondImageRetryKey = key;
+    this.secondPageUrl.set(this.buildPageUrl(pageIndex, this.pageSource(), 1));
   }
 }

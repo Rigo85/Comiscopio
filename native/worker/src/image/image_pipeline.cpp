@@ -103,7 +103,7 @@ ImageResult processImage(
         result.pageHeight = result.originalHeight;
         result.bypassed = true;
     } else {
-        // Resize and encode as WebP
+        // Resize and encode as the configured reader format.
         VipsImage* page = nullptr;
         if (vips_thumbnail_buffer(
                 const_cast<void*>(static_cast<const void*>(data.data())),
@@ -120,12 +120,30 @@ ImageResult processImage(
             return result;
         }
 
-        if (vips_webpsave(page, pagePath.c_str(), "Q", config.readerQuality, nullptr) != 0) {
-            g_object_unref(page);
-            result.ok = false;
-            result.errorMessage = "Failed to save page: " + std::string(vips_error_buffer());
-            vips_error_clear();
-            return result;
+        int saveStatus = 0;
+        if (config.readerFormat == "jpeg") {
+            saveStatus = vips_jpegsave(
+                page,
+                pagePath.c_str(),
+                "Q", config.readerQuality,
+                "strip", TRUE,
+                nullptr);
+        } else {
+            saveStatus = vips_webpsave(
+                page,
+                pagePath.c_str(),
+                "Q", config.readerQuality,
+                "effort", 1,
+                "strip", TRUE,
+                nullptr);
+        }
+
+        if (saveStatus != 0) {
+          g_object_unref(page);
+          result.ok = false;
+          result.errorMessage = "Failed to save page: " + std::string(vips_error_buffer());
+          vips_error_clear();
+          return result;
         }
 
         result.pageWidth = vips_image_get_width(page);

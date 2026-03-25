@@ -27,12 +27,14 @@ public:
     /// Add a successfully processed page
     void addPage(int index, const std::string& originalName,
                  const ImageResult& result,
-                 const std::string& thumbFile, const std::string& pageFile);
+                 const std::string& thumbFile, const std::string& pageFile,
+                 const std::string& originalFile);
 
     /// Add a failed page
     void addErrorPage(int index, const std::string& originalName,
                       const std::string& errorMessage,
-                      const std::string& thumbFile, const std::string& pageFile);
+                      const std::string& thumbFile, const std::string& pageFile,
+                      const std::string& originalFile);
 
     /// Write manifest.json to disk (called after each page for incremental updates)
     void write();

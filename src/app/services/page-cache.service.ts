@@ -10,6 +10,8 @@ export interface CachedPage {
   height: number;
 }
 
+export type PageArtifactSource = 'optimized' | 'original';
+
 /**
  * Simplified page cache for the native worker pipeline.
  *
@@ -22,6 +24,8 @@ export class PageCacheService {
   private fileHash: string | null = null;
   private totalPages = 0;
   private readyPages = new Set<number>();
+  private pageVersions = new Map<number, number>();
+  private generation = 0;
   private manifestPages: any[] = [];
 
   windowBefore = 2;
@@ -30,6 +34,7 @@ export class PageCacheService {
   constructor(private electron: ElectronService) {}
 
   init(fileHash: string, totalPages: number, windowBefore = 2, windowAfter = 3): void {
+    this.generation++;
     this.clear();
     this.fileHash = fileHash;
     this.totalPages = totalPages;
@@ -39,6 +44,7 @@ export class PageCacheService {
 
   markReady(pageIndex: number): void {
     this.readyPages.add(pageIndex);
+    this.pageVersions.set(pageIndex, (this.pageVersions.get(pageIndex) ?? 0) + 1);
   }
 
   updateManifest(pages: any[]): void {
@@ -49,32 +55,34 @@ export class PageCacheService {
     return this.readyPages.has(pageIndex);
   }
 
-  getPageUrl(pageIndex: number): string {
+  getPageUrl(pageIndex: number, source: PageArtifactSource = 'optimized'): string {
     if (!this.fileHash) return '';
-    return `${PAGE_PROTOCOL}://${this.fileHash}/${pageIndex}`;
+    const rev = this.pageVersions.get(pageIndex) ?? 0;
+    return `${PAGE_PROTOCOL}://${this.fileHash}/${pageIndex}?variant=${source}&gen=${this.generation}&rev=${rev}`;
   }
 
-  getPageMeta(pageIndex: number): CachedPage | null {
+  getPageMeta(pageIndex: number, source: PageArtifactSource = 'optimized'): CachedPage | null {
     const entry = this.manifestPages[pageIndex];
     if (!entry) return null;
     return {
       index: pageIndex,
-      url: this.getPageUrl(pageIndex),
+      url: this.getPageUrl(pageIndex, source),
       width: entry.originalWidth || 0,
       height: entry.originalHeight || 0,
     };
   }
 
-  navigateTo(pageIndex: number): string {
+  navigateTo(pageIndex: number, source: PageArtifactSource = 'optimized'): string {
     if (!this.fileHash || pageIndex < 0 || pageIndex >= this.totalPages) return '';
     this.electron.workerFocus(this.fileHash, pageIndex);
-    return this.getPageUrl(pageIndex);
+    return this.getPageUrl(pageIndex, source);
   }
 
   clear(): void {
     this.fileHash = null;
     this.totalPages = 0;
     this.readyPages.clear();
+    this.pageVersions.clear();
     this.manifestPages = [];
   }
 

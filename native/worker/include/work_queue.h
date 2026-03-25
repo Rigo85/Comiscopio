@@ -36,6 +36,9 @@ public:
     int backgroundProgress() const { return bgNext; }
 
 private:
+    static constexpr int kFarJumpThreshold = 12;
+    static constexpr int kMaxPriorityItems = 24;
+
     int totalPages;
     std::string outputDir;
 
@@ -48,10 +51,14 @@ private:
 
     // Background sequential thumb progress
     int bgNext = 0;
+    int lastFocusPage = -1;
+    int lastFocusStart = -1;
+    int lastFocusEnd = -1;
 
     bool isPageDone(int pageIndex) const;
     bool isThumbDone(int pageIndex) const;
     bool thumbExistsOnDisk(int pageIndex) const;
     bool pageExistsOnDisk(int pageIndex) const;
     std::string formatIndex(int index) const;
+    void trimPriorityQueue();
 };

@@ -40,6 +40,10 @@ export class ElectronService {
     return (await this.api.invoke(IpcChannels.WORKER_START, filePath)) as any;
   }
 
+  async getWorkerManifest(fileHash: string): Promise<any | null> {
+    return (await this.api.invoke(IpcChannels.GET_WORKER_MANIFEST, fileHash)) as any;
+  }
+
   workerFocus(fileHash: string, page: number): void {
     this.api.send(IpcChannels.WORKER_FOCUS, fileHash, page);
   }
