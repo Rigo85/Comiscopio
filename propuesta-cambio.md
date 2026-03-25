@@ -1,378 +1,440 @@
-# Propuesta De Cambio
+# Plan De Ejecucion: Worker Nativo Para CBR
 
-## Resumen
+## Objetivo
 
-La arquitectura actual resolvió parte del problema de miniaturas al mover su generacion fuera del renderer, pero sigue pagando demasiado costo por pagina:
+Reorientar el procesamiento de `cbr` hacia un worker nativo externo, portable y autocontenido, que haga en una sola pasada:
 
 - descompresion del contenedor
-- apertura y decodificacion de imagenes grandes
-- generacion de miniaturas
-- reduccion condicional para el lector
-- transporte y sincronizacion entre procesos
+- decodificacion de la imagen
+- generacion de miniatura
+- generacion de version reducida para el lector cuando aplique
+- escritura de artefactos listos para consumo por la app
 
-La propuesta es introducir un binario nativo por SO (`gnu/linux`, `windows`, `macos`) que procese el archivo fuente de forma secuencial y emita artefactos listos para consumo por la aplicacion. La app dejaria de hacer trabajo pesado de imagen y pasaria a leer desde una carpeta de salida estable.
+La aplicacion Electron/Angular debe dejar de hacer trabajo pesado de imagen y pasar a consumir resultados estables desde disco.
 
-La idea central es simple:
+## Estado Actual
 
-`archive entry -> decode una vez -> generar derivados -> persistir`
+Hoy el proyecto ya tiene:
 
-No se debe pagar dos veces por la misma informacion.
+- apertura de `cbr` dentro de Electron
+- extraccion a directorio temporal
+- generacion de miniaturas fuera del renderer
+- cache de paginas reducidas para el lector
+- instrumentacion de tiempos y memoria
 
-## Problema Actual
+Componentes relevantes ya existentes:
 
-Hoy existen tres focos principales:
+- [`electron/file-handler.ts`](/media/work/OneDrive/Personal-Git/Comiscopio/electron/file-handler.ts)
+- [`electron/thumbnail-manager.ts`](/media/work/OneDrive/Personal-Git/Comiscopio/electron/thumbnail-manager.ts)
+- [`src/app/services/page-cache.service.ts`](/media/work/OneDrive/Personal-Git/Comiscopio/src/app/services/page-cache.service.ts)
+- [`src/app/services/thumbnail-cache.service.ts`](/media/work/OneDrive/Personal-Git/Comiscopio/src/app/services/thumbnail-cache.service.ts)
 
-1. La descompresion del contenedor sigue siendo un costo dominante y aun no esta suficientemente atacada como parte del pipeline completo.
-2. Las miniaturas mejoraron, pero siguen costando mucho para archivos grandes porque la decodificacion de la imagen fuente domina el tiempo.
-3. El lector aun puede requerir una version reducida de la pagina, lo que reintroduce trabajo redundante si no se aprovecha la misma decodificacion que ya se hizo para la miniatura.
+Estado funcional actual:
 
-En los logs actuales el patron es consistente:
+- las miniaturas ya se muestran
+- el lector funciona
+- el archivo grande de prueba sigue siendo pesado
+- existen problemas de complejidad y un error Angular de sincronizacion en el panel de miniaturas
+
+## Problemas Detectados
+
+### 1. La extraccion sigue siendo un costo importante
+
+Los tiempos de apertura muestran que gran parte del tiempo total se va en descompresion/extraccion del contenedor.
+
+### 2. Se sigue pagando demasiado por pagina
+
+Los logs muestran que:
 
 - `decodeMs` domina el costo de miniaturas
-- `resizeMs` es secundario
+- `resizeMs` no es el cuello principal
 - `encodeMs` suele ser bajo
-- `writeMs` suele ser bajo, pero tiene picos
+- `writeMs` tiene picos, pero no domina siempre
 
-Conclusion: el problema principal no es el resize. El problema es abrir y decodificar imagenes gigantes demasiadas veces.
+Interpretacion:
 
-## Hipotesis De Cambio
+- el problema principal no es el resize
+- el problema principal es abrir y decodificar imagenes grandes demasiadas veces
 
-Introducir un proceso nativo, invocado con el archivo de entrada, que:
+### 3. La app sigue cargando demasiada logica de procesamiento
 
-1. Abra el `cbr`.
-2. Recorra sus entradas secuencialmente.
-3. Cuando encuentre una imagen:
-   - la descomprima
-   - la decodifique una sola vez
-   - genere la miniatura
-   - genere una version reducida para el lector si supera umbrales
-   - persista los artefactos resultantes en disco
-4. Exponga progreso y estado a la app.
-5. Finalice cuando el conjunto de paginas procesadas este listo.
+Aunque parte del trabajo salio del renderer, Electron sigue asumiendo:
 
-La aplicacion no haria resize ni pipeline de derivacion. Solo consumiria archivos ya materializados.
+- orquestacion de extraccion
+- transporte de miniaturas
+- colas
+- cache
+- transformacion parcial para el lector
 
-## Arquitectura Propuesta
+Eso hace mas dificil:
 
-### Binario Nativo
+- medir
+- depurar
+- simplificar UX
+- aislar problemas
 
-Un ejecutable por plataforma:
+### 4. La arquitectura actual sigue penalizando archivos de 1000+ paginas
 
-- `comiscopio-worker-linux`
-- `comiscopio-worker-windows.exe`
-- `comiscopio-worker-macos`
+Para archivos muy grandes, aunque la generacion de miniaturas mejoro, el sistema sigue sintiendose pesado porque:
 
-Interfaz minima:
+- la pagina original es muy grande
+- la decodificacion es cara
+- el trabajo se reparte entre varias capas
+
+## Direccion Elegida
+
+### Camino Decidido
+
+**Worker externo + UnRAR + libvips**
+
+Esta propuesta asume:
+
+- worker nativo por plataforma
+- extractor basado en `UnRAR`
+- pipeline de imagen basado en `libvips`
+- la app como consumidora de archivos ya generados
+
+## Por Que Este Camino
+
+### UnRAR
+
+Se elige `UnRAR` porque la prioridad aqui es:
+
+- compatibilidad practica con `rar/rar5`
+- buen comportamiento con `cbr`
+- evitar abrir otro frente de compatibilidad mientras se redefine la arquitectura
+
+No se esta optimizando por pureza de licencia sino por viabilidad tecnica y tiempo de salida.
+
+### libvips
+
+Se elige `libvips` porque:
+
+- es fuerte en rendimiento
+- es eficiente en memoria
+- sirve muy bien para pipelines de imagen
+- es una mejor apuesta que seguir dependiendo de transformaciones indirectas dentro de Electron
+
+### Worker externo
+
+Se elige proceso externo y no addon Node como primera opcion porque:
+
+- aisla crashes
+- simplifica profiling
+- reduce acoplamiento con Electron
+- permite una frontera tecnica limpia entre app y motor
+
+## Hipotesis Tecnica
+
+La mejora real no vendra de "usar otro extractor" por si solo.
+
+La mejora real vendra de este principio:
+
+> cada pagina debe descomprimirse y decodificarse una sola vez, y desde esa unica decodificacion deben salir todos los derivados necesarios.
+
+Pipeline ideal por pagina:
+
+```text
+entrada RAR
+  -> bytes de imagen descomprimidos
+  -> decode una vez
+  -> miniatura
+  -> version para lector si aplica
+  -> persistencia
+```
+
+## Aclaracion Sobre Redimensionado
+
+Para redimensionar una imagen raster hay que entrar al dominio de imagen decodificada.
+
+Respuesta corta:
+
+- si, hay que pasar por una representacion de pixeles o equivalente
+- no necesariamente a un bitmap gigantesco final
+- idealmente el decoder debe permitir, cuando sea posible, bajar costo durante decode
+
+Conclusion operativa:
+
+- el worker debe evitar multiples decodificaciones
+- thumb y pagina del lector deben salir del mismo material decodificado
+
+## Arquitectura Objetivo
+
+### Layout Del Worker
+
+Se propone mantenerlo dentro del repo actual, no en otro repo todavia.
+
+Estructura sugerida:
+
+```text
+native/
+  worker/
+    src/
+    include/
+    vendor/
+    build/
+    scripts/
+```
+
+La razon para mantenerlo dentro del repo actual:
+
+- el contrato con la app va a cambiar mucho
+- la iteracion inicial necesita cercania
+- separar repos ahora agregaria friccion sin beneficio inmediato
+
+## Contrato Con La App
+
+Interfaz minima del worker:
 
 ```bash
 comiscopio-worker \
   --input "/ruta/archivo.cbr" \
-  --output "/ruta/temp/sesion" \
-  --format cbr
+  --output "/ruta/temp/sesion"
 ```
 
-Parametros futuros:
+Parametros previstos:
 
 - `--thumb-width 180`
 - `--thumb-quality 60`
 - `--reader-max-dimension 2400`
 - `--reader-quality 82`
-- `--emit-originals false`
 - `--jobs 1`
 
-### Carpeta De Salida
+La app debe:
 
-La salida debe ser totalmente predecible:
+1. lanzar el worker
+2. leer progreso
+3. leer artefactos desde disco
+4. cancelar si el usuario cambia de archivo
+5. limpiar sesion al cerrar
+
+La app no debe:
+
+- descomprimir
+- generar miniaturas
+- reducir paginas
+- mantener logica complicada de transporte de imagenes
+
+## Formato De Salida
+
+Salida incremental y estable:
 
 ```text
 sesion/
   manifest.json
-  pages/
-    000000.webp
-    000001.webp
   thumbs/
     000000.jpg
-    000001.jpg
-  originals/
-    000000.jpg
-    000001.png
+  pages/
+    000000.webp
   meta/
     000000.json
-    000001.json
 ```
 
-La app solo necesita:
+El `manifest.json` debe escribirse progresivamente.
 
-- leer `manifest.json`
-- mostrar `thumbs/*.jpg`
-- mostrar `pages/*.webp`
+Cada pagina debe poder quedar disponible antes del final completo del archivo.
 
-### Contrato Con La App
+Eso corrige una version peor de la idea original:
 
-La app Electron/Angular pasa a ser un coordinador:
+- no conviene que la app espere al final total
+- conviene que consuma resultados a medida que aparecen
 
-1. lanza el worker
-2. observa progreso
-3. muestra lo que ya existe en disco
-4. cancela o limpia si el usuario cambia de archivo
+## Requisitos De Portabilidad
 
-Esto elimina mucha logica de transporte, colas, URLs especiales y sincronizacion fina entre procesos.
+### Regla
 
-## Pipeline Por Pagina
+No depender de librerias del sistema si puede evitarse.
 
-Pipeline ideal:
+### Objetivo Practico
 
-1. Leer entrada comprimida desde el contenedor.
-2. Descomprimir bytes de la imagen.
-3. Decodificar una sola vez a una representacion raster apta para derivacion.
-4. Desde esa unica decodificacion:
-   - generar miniatura
-   - generar pagina reducida para lector si aplica
-5. Escribir ambos resultados.
+El worker debe viajar con sus dependencias.
 
-Representacion conceptual:
+Escenario aceptable:
 
-```text
-RAR entry
-  -> bytes descomprimidos de imagen
-  -> decode raster una vez
-  -> resize thumb
-  -> resize reader si aplica
-  -> encode outputs
-  -> persist
-```
+- binario principal
+- librerias junto al binario
+- resolucion local de dependencias
 
-## Pregunta Clave: Hay Que Llevar La Imagen A Mapa De Bits
+Ejemplos por SO:
 
-En terminos practicos: casi siempre, si.
+- Linux: `rpath` o wrapper con `LD_LIBRARY_PATH`
+- macOS: `@loader_path`
+- Windows: `.dll` junto al `.exe`
 
-Pero no necesariamente a un bitmap RGBA gigante y definitivo.
+### Targets Iniciales
 
-Lo correcto es pensar asi:
+- `linux-x64`
+- `win-x64`
+- `macos-x64`
+- `macos-arm64`
 
-- para redimensionar una imagen raster, hay que entrar al dominio de imagen decodificada
-- algunos decoders permiten hacer downscale durante decode
-- eso puede evitar la peor version del costo
+`linux-arm64` queda como opcional de segunda fase.
 
-Entonces:
+## Herramientas Elegidas
 
-- no se puede asumir que todo resize exige un bitmap full-size completo
-- pero tampoco se puede esperar hacer resize util directamente sobre bytes comprimidos del archivo
+### Extraccion
 
-Para JPEG, por ejemplo, algunos decoders permiten decode reducido. Eso es importante porque muchas paginas de comics vienen en JPEG.
+- `UnRAR`
 
-La consecuencia de diseño es:
+### Imagen
 
-- el worker debe usar un decoder que permita, cuando sea posible, producir una salida ya reducida
-- si no se puede, al menos debe decodificar solo una vez y reutilizar esa salida para ambos derivados
+- `libvips`
 
-## Compatibilidad Con RAR / RAR5
+### Integracion
 
-### Opcion 1: `libarchive`
+- worker nativo externo
+- app Electron lo invoca por proceso
 
-Ventajas:
+### Artefactos
 
-- libre
-- portable
-- buena integracion con pipeline tipo streaming
-- razonable como dependencia base del worker
+- miniaturas: `jpg`
+- paginas lector: `webp` o formato equivalente definido por pruebas
 
-Riesgos:
+## Lo Que Ya Sabemos Que No Queremos
 
-- RAR es formato propietario
-- soporte real de archivos exoticos puede tener bordes
-- no asumir compatibilidad perfecta con todos los `cbr` del mundo
+- seguir profundizando la arquitectura actual de miniaturas dentro de Electron
+- seguir mezclando transporte, cache y generacion en la app
+- depender de callbacks complejos del renderer para un problema que es de pipeline nativo
 
-Recomendacion:
+## Fases De Ejecucion
 
-- primera apuesta tecnica
-- ideal para validar arquitectura
+### Fase 0: Preparacion
 
-### Opcion 2: `unrar`
+- congelar el estado actual en rama dedicada
+- mantener esta propuesta como documento vivo del cambio
 
-Ventajas:
+Estado:
 
-- mayor compatibilidad practica con RAR/RAR5
-- util como backend de contingencia
+- completado en rama `native-worker-plan`
 
-Riesgos:
+### Fase 1: Spike Tecnico Del Worker
 
-- licencia menos comoda
-- menos atractivo si se busca una implementacion totalmente propia y limpia
+Objetivo:
 
-Recomendacion:
+- demostrar que `UnRAR + libvips` puede procesar una pagina y producir:
+  - thumb
+  - pagina reducida
 
-- mantenerlo como plan B si `libarchive` falla en corpus real
+Entregables:
 
-### Opcion 3: backend dual
+- binario invocable por CLI
+- salida minima a carpeta temporal
+- medicion de tiempos por etapa
 
-El worker podria abstraer el extractor:
+No incluye:
 
-- backend A: `libarchive`
-- backend B: `unrar`
+- integracion completa con Electron
+- empaquetado final
 
-Y conmutar por:
+### Fase 2: Pipeline Secuencial Completo Para CBR
 
-- configuracion
-- tipo de error
-- heuristica por archivo
+Objetivo:
 
-Eso sube complejidad, asi que no deberia ser la version 1.
+- recorrer todo el archivo
+- emitir resultados progresivos
+- producir `manifest.json`
 
-## Que Haria Una Persona Top 0.1%
+Entregables:
 
-No intentaria optimizar por separado:
-
-- miniaturas
-- lector
-- extraccion
-
-Lo veria como un unico problema de dataflow.
-
-La pregunta correcta no es:
-
-"como hago miniaturas mas rapido?"
-
-La pregunta correcta es:
-
-"como hago para no decodificar y transformar la misma pagina mas de una vez?"
-
-Esa mirada cambia todo.
-
-## Beneficios Esperados
-
-1. Menos sobreingenieria en la app.
-2. Menos trabajo pesado en renderer.
-3. Menos acoplamiento entre UI y procesamiento de imagen.
-4. Menos duplicacion de decode.
-5. Mejor predictibilidad de tiempos.
-6. Mejor posibilidad de profiling real del pipeline.
-7. Camino mas claro para soportar mas formatos en el futuro.
-
-## Riesgos Y Costos
-
-1. Mantener un binario por plataforma agrega complejidad operativa.
-2. Hay que empaquetar y distribuir artefactos nativos.
-3. La compatibilidad RAR/RAR5 no debe asumirse sin corpus real.
-4. El throughput final dependera mucho del decoder de imagen elegido, no solo del extractor.
-5. Si el worker solo produce salida al final, la UX puede empeorar. Conviene emision progresiva.
-
-## Ajuste Importante A La Hipotesis
-
-La frase "la app solo espera por la terminacion de este proceso" conviene corregirla.
-
-Eso seria demasiado rigido para UX.
-
-Mejor:
-
-- el worker debe escribir resultados progresivamente
-- la app puede consumir en cuanto existan
-- la terminacion completa no debe ser requisito para mostrar primeras paginas y primeras miniaturas
-
-La carpeta sigue siendo simple y estatica, pero la produccion de artefactos debe ser incremental.
-
-## Version 1 Recomendada
-
-### Objetivo
-
-Validar si el ahorro real aparece cuando se unifican:
-
-- extraccion
-- decode
-- thumb generation
-- reader downscale
-
-### Alcance
-
-- soportar solo `cbr`
-- procesar en orden secuencial
-- producir `thumbs` siempre
-- producir `pages` reducidas solo si exceden umbral
-- escribir `manifest.json` incremental
-- dejar fuera, por ahora:
-  - formatos adicionales
-  - paralelismo complejo
-  - backend dual de extractores
-
-### Politica De Derivacion
-
-Por cada pagina:
-
-- miniatura: siempre
-- pagina de lector:
-  - si no excede umbral, reutilizar original o copiarla
-  - si excede umbral, generar `webp` o formato equivalente reducido
-
-## Plan De Implementacion
-
-### Fase 1
-
-- prototipo del worker con `cbr`
-- extractor base con `libarchive`
-- decoder de imagen elegido por rendimiento y portabilidad
 - carpeta de salida estable
-- manifest incremental
+- progreso por pagina
+- cancelacion basica
 
-### Fase 2
+### Fase 3: Integracion Con La App
 
-- integrar la app como consumidora simple de carpeta
-- eliminar parte del pipeline actual de miniaturas
-- medir:
-  - tiempo a primera miniatura
-  - tiempo a primera pagina lista
-  - tiempo total de archivo
-  - memoria peak
+Objetivo:
 
-### Fase 3
+- que Electron solo orqueste y consuma salida
 
-- evaluar corpus real de `cbr`
-- medir fallos por compatibilidad RAR/RAR5
-- decidir si hace falta backend alternativo
+Trabajo:
 
-## Sesgos Ocultos En Esta Propuesta
+- lanzar worker
+- escuchar progreso
+- leer `manifest.json`
+- reemplazar partes del pipeline actual
 
-### Sesgo 1: "lo nativo siempre es mejor"
+### Fase 4: Empaquetado Portable
+
+Objetivo:
+
+- dejar los binarios por plataforma junto con sus dependencias
+
+Trabajo:
+
+- layout de artefactos
+- deteccion de plataforma
+- resolucion local de libs
+
+### Fase 5: Medicion Comparativa
+
+Metricas obligatorias:
+
+- tiempo a primera miniatura
+- tiempo a primera pagina disponible
+- tiempo total de archivo
+- memoria peak del worker
+- memoria peak de Electron
+- cantidad de decodificaciones por pagina
+
+## Riesgos
+
+### 1. Complejidad De Build
+
+Compilar y empaquetar `UnRAR + libvips` de manera portable no es trivial.
+
+### 2. Integracion De Dependencias
+
+El mayor riesgo operativo no es la idea del worker, sino dejarlo realmente autocontenido.
+
+### 3. Formato De Salida
+
+Si el contrato de artefactos no se diseña bien, la app podria seguir necesitando "magia" alrededor.
+
+### 4. Eleccion De Lenguaje Del Worker
+
+Esto aun no esta fijado. Lo importante aqui es la arquitectura y el stack de dependencias, no el lenguaje.
+
+## Sesgos Y Correccion
+
+### Sesgo 1: pensar que el extractor resolvera todo
 
 Correccion:
 
-No siempre. Si el costo dominante fuera UI o transporte, mover a nativo no resolveria nada. En este caso la evidencia apunta a decode y derivacion de imagen, asi que aqui si parece una apuesta razonable.
+No. El extractor solo resuelve una parte. El ahorro fuerte depende de fusionar extraccion, decode y derivados.
 
-### Sesgo 2: "una arquitectura limpia vale cualquier costo"
-
-Correccion:
-
-No. Introducir binarios por SO tiene costo de build, firma, empaquetado, soporte y debugging. Debe justificarse por datos. En este proyecto ya hay suficientes sintomas para tomarlo en serio, pero aun requiere una validacion con prototipo.
-
-### Sesgo 3: "esperar a que termine todo simplifica"
+### Sesgo 2: pensar que lo nativo automaticamente arregla la UX
 
 Correccion:
 
-Simplifica la implementacion, pero empeora UX. Lo correcto es carpeta simple con produccion incremental, no carpeta simple con bloqueo total.
+No. Si el worker solo entrega todo al final, la UX puede seguir siendo mala. Debe haber emision progresiva.
+
+### Sesgo 3: separar el worker en otro repo para "hacerlo bien"
+
+Correccion:
+
+Todavia no. La frontera tecnica debe ser limpia, pero el monorepo es mejor para esta etapa.
 
 ## Veredicto
 
-La direccion propuesta es tecnicamente solida y ataca el problema correcto.
+La direccion del proyecto cambia desde:
 
-La idea valiosa no es solamente "usar un binario nativo". La idea valiosa es esta:
+- optimizar miniaturas y paginas dentro de Electron
 
-- extraer una vez
-- decodificar una vez
-- derivar multiples salidas
-- persistirlas en una estructura trivial para la app
+hacia:
 
-Si hubiera que resumir la propuesta en una sola linea:
+- construir un worker nativo autocontenido que convierta el `cbr` en artefactos listos desde una sola pasada
 
-> Mover el trabajo pesado a un worker nativo secuencial que convierta cada pagina en artefactos listos de una sola pasada.
+En una sola linea:
 
-## Recomendacion Final
+> Vamos a sacar el procesamiento duro de imagen y contenedor fuera de Electron y rehacerlo como pipeline nativo incremental con UnRAR y libvips.
 
-Construir un prototipo pequeño del worker antes de seguir afinando la arquitectura actual de miniaturas dentro de Electron.
+## Proximo Paso
 
-Si el prototipo confirma reduccion significativa en:
+Construir el spike de la Fase 1.
 
-- tiempo a primera miniatura
-- tiempo a pagina lista
-- numero de decodificaciones por pagina
-- uso de memoria
+Ese spike debe responder, con datos:
 
-entonces valdra la pena reorientar el producto hacia este modelo.
+1. cuanto cuesta procesar una pagina con este stack
+2. cuanto baja el costo frente al pipeline actual
+3. si la emision incremental es suficientemente simple
+4. como quedan empacadas las dependencias por plataforma
