@@ -7,6 +7,7 @@
 /out-tsc
 /bazel-out
 /release
+/native/worker/build/
 
 # Node
 /node_modules
