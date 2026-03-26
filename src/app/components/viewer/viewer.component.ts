@@ -154,7 +154,7 @@ interface ShortcutSection {
       <div
         class="viewer-container viewer-reading"
         [class.vertical-mode]="readerState.isVertical()"
-        [class.zoomed]="zoomPan.isZoomed()"
+        [class.pannable]="canPanReader()"
         (mousedown)="onPanStart($event)"
         (mousemove)="onPanMove($event)"
         (mouseup)="onPanEnd()"
@@ -264,7 +264,7 @@ interface ShortcutSection {
       background: #1a1a1a; position: relative; overflow: hidden;
       &.drag-over { background: #2a2a3a; outline: 2px dashed #667; outline-offset: -8px; }
       &.vertical-mode { overflow-y: auto; align-items: flex-start; }
-      &.zoomed { cursor: grab; &:active { cursor: grabbing; } }
+      &.pannable { cursor: grab; &:active { cursor: grabbing; } }
     }
 
     .viewer-reading { cursor: default; }
@@ -554,6 +554,10 @@ export class ViewerComponent implements OnInit, OnDestroy {
       && !this.readerState.isVertical();
   });
 
+  canPanReader = computed(() => {
+    return this.zoomPan.isZoomed() || this.readerState.fitMode() === 'original';
+  });
+
   fitClass = computed(() => {
     switch (this.readerState.fitMode()) {
       case 'fit-width': return 'fit-width';
@@ -720,6 +724,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
         return;
       case 'fit-mode':
         this.readerState.fitMode.set(action.value);
+        this.zoomPan.resetZoom();
         this.persistSettings();
         return;
       case 'page-layout':
@@ -787,13 +792,13 @@ export class ViewerComponent implements OnInit, OnDestroy {
     const action = this.keybindings.match(event);
     if (action) { event.preventDefault(); this.executeAction(action); return; }
 
-    if (this.fileState() && this.zoomPan.isZoomed() && !event.ctrlKey && !event.shiftKey) {
+    if (this.fileState() && this.canPanReader() && !event.ctrlKey && !event.shiftKey) {
       const S = 50;
       switch (event.key) {
-        case 'ArrowRight': event.preventDefault(); this.zoomPan.pan(-S, 0); return;
-        case 'ArrowLeft': event.preventDefault(); this.zoomPan.pan(S, 0); return;
-        case 'ArrowDown': event.preventDefault(); this.zoomPan.pan(0, -S); return;
-        case 'ArrowUp': event.preventDefault(); this.zoomPan.pan(0, S); return;
+        case 'ArrowRight': event.preventDefault(); this.zoomPan.pan(-S, 0, this.readerState.fitMode() === 'original'); return;
+        case 'ArrowLeft': event.preventDefault(); this.zoomPan.pan(S, 0, this.readerState.fitMode() === 'original'); return;
+        case 'ArrowDown': event.preventDefault(); this.zoomPan.pan(0, -S, this.readerState.fitMode() === 'original'); return;
+        case 'ArrowUp': event.preventDefault(); this.zoomPan.pan(0, S, this.readerState.fitMode() === 'original'); return;
       }
     }
   }
@@ -845,7 +850,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
 
   @HostListener('click', ['$event'])
   onClick(event: MouseEvent): void {
-    if (!this.fileState() || this.showGoToPage() || this.zoomPan.isZoomed()) return;
+    if (!this.fileState() || this.showGoToPage() || this.canPanReader()) return;
     const target = event.target as HTMLElement;
     if (target.tagName === 'BUTTON' || target.tagName === 'INPUT' ||
         target.closest('app-thumbnails') || target.closest('app-toolbar') || target.closest('app-context-menu')) return;
@@ -881,12 +886,16 @@ export class ViewerComponent implements OnInit, OnDestroy {
 
   // --- Pan ---
   onPanStart(event: MouseEvent): void {
-    if (!this.zoomPan.isZoomed() || event.button !== 0) return;
+    if (!this.canPanReader() || event.button !== 0) return;
     this.isPanning = true; this.lastPanX = event.clientX; this.lastPanY = event.clientY; event.preventDefault();
   }
   onPanMove(event: MouseEvent): void {
     if (!this.isPanning) return;
-    this.zoomPan.pan(event.clientX - this.lastPanX, event.clientY - this.lastPanY);
+    this.zoomPan.pan(
+      event.clientX - this.lastPanX,
+      event.clientY - this.lastPanY,
+      this.readerState.fitMode() === 'original',
+    );
     this.lastPanX = event.clientX; this.lastPanY = event.clientY;
   }
   onPanEnd(): void { this.isPanning = false; }

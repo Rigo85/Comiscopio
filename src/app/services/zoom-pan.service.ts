@@ -88,10 +88,11 @@ export class ZoomPanService {
 
   // --- Pan ---
 
-  pan(dx: number, dy: number): void {
-    if (!this.isZoomed()) return;
-    this.panX.update(x => x + dx / this.zoom());
-    this.panY.update(y => y + dy / this.zoom());
+  pan(dx: number, dy: number, allowAtBaseZoom = false): void {
+    if (!this.isZoomed() && !allowAtBaseZoom) return;
+    const divisor = allowAtBaseZoom ? Math.max(this.zoom(), 1) : this.zoom();
+    this.panX.update(x => x + dx / divisor);
+    this.panY.update(y => y + dy / divisor);
   }
 
   // --- Filters ---
