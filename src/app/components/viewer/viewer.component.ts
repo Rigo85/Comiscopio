@@ -9,6 +9,7 @@ import { ToolbarComponent } from '../toolbar/toolbar.component';
 import { ContextMenuComponent, ContextMenuAction } from '../context-menu/context-menu.component';
 import { ThumbnailsComponent } from '../thumbnails/thumbnails.component';
 import type { RecentFile } from '../../../../shared/models';
+import type { KeyBinding } from '../../../../shared/keybindings';
 
 interface FileState {
   fileHash: string;
@@ -16,6 +17,11 @@ interface FileState {
   fileName: string;
   filePath: string;
   totalPages: number;
+}
+
+interface ShortcutSection {
+  title: string;
+  items: KeyBinding[];
 }
 
 @Component({
@@ -38,6 +44,37 @@ interface FileState {
         <div class="viewer-error">
           <p>{{ error() }}</p>
           <button (click)="clearError()">Cerrar</button>
+        </div>
+      </div>
+    }
+
+    @if (showShortcuts()) {
+      <div class="viewer-overlay" (click)="showShortcuts.set(false)">
+        <div
+          class="shortcuts-modal"
+          (click)="$event.stopPropagation()"
+          (wheel)="onShortcutsWheel($event)"
+        >
+          <div class="shortcuts-header">
+            <h2>Atajos</h2>
+            <button class="shortcuts-close" (click)="showShortcuts.set(false)" title="Cerrar">Cerrar</button>
+          </div>
+
+          <div class="shortcuts-content">
+            @for (section of shortcutSections(); track section.title) {
+              <section class="shortcuts-section">
+                <h3>{{ section.title }}</h3>
+                <div class="shortcuts-list">
+                  @for (item of section.items; track item.action) {
+                    <div class="shortcut-row">
+                      <span class="shortcut-label">{{ item.label }}</span>
+                      <kbd>{{ formatShortcut(item.keys) }}</kbd>
+                    </div>
+                  }
+                </div>
+              </section>
+            }
+          </div>
         </div>
       </div>
     }
@@ -284,6 +321,75 @@ interface FileState {
       p { margin-bottom: 1rem; max-width: 400px; white-space: pre-wrap; }
       button { padding: 6px 16px; background: #3a3a3a; color: #ccc; border: 1px solid #555; border-radius: 4px; cursor: pointer; &:hover { background: #4a4a4a; } }
     }
+    .shortcuts-modal {
+      width: min(720px, calc(100vw - 32px));
+      max-height: min(80vh, 720px);
+      overflow: auto;
+      background: #252525;
+      border: 1px solid #444;
+      border-radius: 10px;
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+      color: #ddd;
+    }
+    .shortcuts-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 18px 12px;
+      border-bottom: 1px solid #3a3a3a;
+      h2 { margin: 0; font-size: 1.05rem; font-weight: 600; color: #f0f0f0; }
+    }
+    .shortcuts-close {
+      padding: 6px 12px; background: #333; color: #ddd;
+      border: 1px solid #555; border-radius: 6px; cursor: pointer;
+      &:hover { background: #3d3d3d; }
+    }
+    .shortcuts-content {
+      padding: 14px 18px 18px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+    }
+    .shortcuts-section {
+      h3 {
+        margin: 0 0 10px;
+        font-size: 0.85rem;
+        color: #9aa7c9;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+    }
+    .shortcuts-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .shortcut-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 8px 10px;
+      background: #1e1e1e;
+      border: 1px solid #333;
+      border-radius: 8px;
+    }
+    .shortcut-label {
+      color: #cfcfcf;
+      font-size: 0.9rem;
+    }
+    kbd {
+      min-width: fit-content;
+      padding: 3px 8px;
+      background: #111;
+      border: 1px solid #555;
+      border-bottom-color: #666;
+      border-radius: 6px;
+      color: #fafafa;
+      font: inherit;
+      font-size: 0.85rem;
+      white-space: nowrap;
+    }
     .goto-overlay {
       position: absolute; inset: 0; display: flex; align-items: center;
       justify-content: center; background: rgba(0, 0, 0, 0.5); z-index: 20;
@@ -308,11 +414,31 @@ export class ViewerComponent implements OnInit, OnDestroy {
   error = signal<string | null>(null);
   isDragOver = signal(false);
   showGoToPage = signal(false);
+  showShortcuts = signal(false);
   showThumbnails = signal(true);
   isAlwaysOnTop = signal(false);
   isFullscreen = signal(false);
   recentFiles = signal<RecentFile[]>([]);
   pageSource = signal<PageArtifactSource>('optimized');
+  shortcuts = signal<KeyBinding[]>([]);
+  shortcutSections = computed<ShortcutSection[]>(() => {
+    const groups: Array<{ title: string; actions: string[] }> = [
+      { title: 'Archivo', actions: ['open-file', 'close-file', 'new-window'] },
+      { title: 'Navegacion', actions: ['next-page', 'prev-page', 'next-page-alt', 'prev-page-alt', 'next-page-alt2', 'first-page', 'last-page', 'goto-page'] },
+      { title: 'Zoom', actions: ['zoom-in', 'zoom-out', 'zoom-reset'] },
+      { title: 'Filtros', actions: ['brightness-up', 'brightness-down', 'contrast-up', 'contrast-down', 'reset-filters'] },
+      { title: 'Vista', actions: ['cycle-reading-mode', 'toggle-page-layout', 'cycle-fit-mode', 'toggle-thumbnails', 'toggle-fullscreen', 'add-bookmark'] },
+    ];
+    const bindings = this.shortcuts();
+    return groups
+      .map((group) => ({
+        title: group.title,
+        items: group.actions
+          .map((action) => bindings.find((binding) => binding.action === action))
+          .filter((binding): binding is KeyBinding => !!binding),
+      }))
+      .filter((group) => group.items.length > 0);
+  });
 
   private currentPageMeta: CachedPage | null = null;
   private isPanning = false;
@@ -378,7 +504,9 @@ export class ViewerComponent implements OnInit, OnDestroy {
       this.isFullscreen.set(state.isFullscreen);
     });
 
-    this.keybindings.load();
+    void this.keybindings.load().then(() => {
+      this.shortcuts.set(this.keybindings.getAll());
+    });
     this.loadRecentFiles();
   }
 
@@ -513,6 +641,9 @@ export class ViewerComponent implements OnInit, OnDestroy {
       case 'open-folder':
         this.openFolderDialog();
         return;
+      case 'shortcuts':
+        this.showShortcuts.set(true);
+        return;
     }
 
     const actionMap: Record<string, string> = {
@@ -540,7 +671,13 @@ export class ViewerComponent implements OnInit, OnDestroy {
 
   @HostListener('window:keydown', ['$event'])
   onKeyDown(event: KeyboardEvent): void {
+    if (event.key === 'F1') {
+      event.preventDefault();
+      this.showShortcuts.update((value) => !value);
+      return;
+    }
     if (event.key === 'Escape') {
+      if (this.showShortcuts()) { this.showShortcuts.set(false); return; }
       if (this.showGoToPage()) { this.showGoToPage.set(false); return; }
       if (this.showThumbnails()) { this.showThumbnails.set(false); return; }
       return;
@@ -791,6 +928,14 @@ export class ViewerComponent implements OnInit, OnDestroy {
   }
 
   clearError(): void { this.error.set(null); }
+
+  formatShortcut(value: string): string {
+    return value === ' ' ? 'Espacio' : value;
+  }
+
+  onShortcutsWheel(event: WheelEvent): void {
+    event.stopPropagation();
+  }
 
   // --- Private ---
 
