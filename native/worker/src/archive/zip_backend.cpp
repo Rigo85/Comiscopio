@@ -4,6 +4,7 @@
 #include <archive_entry.h>
 
 #include <algorithm>
+#include <csignal>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -33,6 +34,11 @@ static std::string getExtensionZip(const std::string& filename) {
 
 static bool isImageFileZip(const std::string& filename) {
     return IMAGE_EXTENSIONS.count(getExtensionZip(filename)) > 0;
+}
+
+static bool isCancelledZip(void* userData) {
+    auto* cancelContext = reinterpret_cast<ArchiveCancelContext*>(userData);
+    return cancelContext && cancelContext->flag && *cancelContext->flag != 0;
 }
 
 struct ZipIndexEntry {
@@ -66,6 +72,10 @@ public:
         int imageCount = 0;
 
         while (archive_read_next_header(arc, &entry) == ARCHIVE_OK) {
+            if (isCancelledZip(userData)) {
+                break;
+            }
+
             const char* pathname = archive_entry_pathname(entry);
             std::string name = pathname ? pathname : "";
             const bool isDir = archive_entry_filetype(entry) == AE_IFDIR;
@@ -80,13 +90,21 @@ public:
             char chunk[64 * 1024];
             la_ssize_t bytesRead = 0;
             bool failed = false;
+            bool cancelled = false;
 
             while ((bytesRead = archive_read_data(arc, chunk, sizeof(chunk))) > 0) {
+                if (isCancelledZip(userData)) {
+                    cancelled = true;
+                    break;
+                }
                 buffer.insert(buffer.end(), chunk, chunk + bytesRead);
             }
 
             if (bytesRead < 0) {
                 failed = true;
+            }
+            if (cancelled) {
+                break;
             }
 
             std::string ext = getExtensionZip(name);

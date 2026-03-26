@@ -20,6 +20,7 @@ export interface WorkerSession {
   manifest: any | null;
   ready: boolean;      // true after "archive" event (extraction done)
   cancelled: boolean;
+  cleanupTimer: NodeJS.Timeout | null;
 }
 
 type EventListener = (event: WorkerEvent) => void;
@@ -128,6 +129,7 @@ export class NativeWorkerBridge {
       manifest: null,
       ready: false,
       cancelled: false,
+      cleanupTimer: null,
     };
 
     this.sessions.set(fileHash, session);
@@ -185,7 +187,13 @@ export class NativeWorkerBridge {
     });
 
     proc.on('exit', (code) => {
+      if (session.cleanupTimer) {
+        clearTimeout(session.cleanupTimer);
+        session.cleanupTimer = null;
+      }
       session.process = null;
+      this.cleanupSessionArtifacts(session);
+      this.sessions.delete(fileHash);
       if (!session.cancelled && code !== 0) {
         listener({ type: 'error', message: `Worker exited with code ${code}` });
       }
@@ -219,17 +227,17 @@ export class NativeWorkerBridge {
 
     if (session.process) {
       session.process.stdin?.end();
-      session.process.kill('SIGTERM');
-      session.process = null;
+      const proc = session.process;
+      proc.kill('SIGTERM');
+      session.cleanupTimer = setTimeout(() => {
+        if (session.process === proc) {
+          proc.kill('SIGKILL');
+        }
+      }, 1500);
+      return;
     }
 
-    // Clean temp directory
-    try {
-      if (fs.existsSync(session.outputDir)) {
-        fs.rmSync(session.outputDir, { recursive: true, force: true });
-      }
-    } catch { /* ignore cleanup errors */ }
-
+    this.cleanupSessionArtifacts(session);
     this.sessions.delete(fileHash);
   }
 
@@ -243,6 +251,16 @@ export class NativeWorkerBridge {
   /** Get a session by file hash */
   getSession(fileHash: string): WorkerSession | undefined {
     return this.sessions.get(fileHash);
+  }
+
+  private cleanupSessionArtifacts(session: WorkerSession): void {
+    try {
+      if (fs.existsSync(session.outputDir)) {
+        fs.rmSync(session.outputDir, { recursive: true, force: true });
+      }
+    } catch {
+      /* ignore cleanup errors */
+    }
   }
 
   /** Read the manifest.json from a session's output directory */

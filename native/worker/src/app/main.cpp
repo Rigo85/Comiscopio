@@ -235,6 +235,7 @@ static void logWorkerMemoryWithQueue(const char* label, const WorkQueue& queue, 
 int main(int argc, char* argv[]) {
     CliArgs args;
     if (!parseArgs(argc, argv, args)) return 1;
+    ArchiveCancelContext cancelContext{&cancelled};
 
     if (!fs::exists(args.input)) {
         logDiagnostic("error", "worker", "input_not_found", "input=%s", json(args.input).dump().c_str());
@@ -459,7 +460,7 @@ int main(int argc, char* argv[]) {
 
     try {
         totalEntries = backend->open(args.input, args.output + "/raw",
-                                      extractionProgress, nullptr);
+                                      extractionProgress, &cancelContext);
     } catch (const std::exception& e) {
         logDiagnostic("error", "worker", "archive_open_failed", "message=%s", json(std::string(e.what())).dump().c_str());
         vips_shutdown();
@@ -475,91 +476,93 @@ int main(int argc, char* argv[]) {
 
     int processedCount = previewProcessed ? 1 : 0;
 
-    // Emit archive info
-    {
-        json j;
-        j["type"] = "archive";
-        j["totalPages"] = totalEntries;
-        j["extractionMs"] = extractMs;
-        fprintf(stdout, "%s\n", j.dump().c_str());
-        fflush(stdout);
-    }
-
     // Work queue
     WorkQueue queue(totalEntries, args.output);
     if (processedCount > 0) {
         queue.markDone(0);
     }
 
-    // === Phase 2: Process pages on demand ===
-    logDiagnostic("info", "worker", "phase_start", "phase=%s", json("focus_processing").dump().c_str());
-
-    while (!cancelled) {
-        // Check stdin
-        json cmd;
-        while (readStdinCommand(cmd)) {
-            std::string type = cmd.value("type", "");
-            if (type == "focus") {
-                int page = cmd.value("page", 0);
-                queue.focus(page, args.windowBefore, args.windowAfter);
-            } else if (type == "quit") {
-                cancelled = 1;
-                break;
-            }
-        }
-        if (cancelled) break;
-
-        // Get next work item
-        bool needsPage = false;
-        int pageIndex = queue.next(needsPage);
-
-        if (pageIndex < 0) {
-#ifndef _WIN32
-            struct pollfd pfd;
-            pfd.fd = STDIN_FILENO;
-            pfd.events = POLLIN;
-            poll(&pfd, 1, 100);
-#endif
-            continue;
+    if (!cancelled) {
+        // Emit archive info
+        {
+            json j;
+            j["type"] = "archive";
+            j["totalPages"] = totalEntries;
+            j["extractionMs"] = extractMs;
+            fprintf(stdout, "%s\n", j.dump().c_str());
+            fflush(stdout);
         }
 
-        if (needsPage) {
-            if (processPageAtIndex(*backend, pageIndex)) {
-                processedCount++;
-                if (processedCount % 25 == 0) {
-                    char label[64];
-                    std::snprintf(label, sizeof(label), "processed=%d", processedCount);
-                    logWorkerMemoryWithQueue(label, queue, processedCount);
+        // === Phase 2: Process pages on demand ===
+        logDiagnostic("info", "worker", "phase_start", "phase=%s", json("focus_processing").dump().c_str());
+
+        while (!cancelled) {
+            // Check stdin
+            json cmd;
+            while (readStdinCommand(cmd)) {
+                std::string type = cmd.value("type", "");
+                if (type == "focus") {
+                    int page = cmd.value("page", 0);
+                    queue.focus(page, args.windowBefore, args.windowAfter);
+                } else if (type == "quit") {
+                    cancelled = 1;
+                    break;
                 }
             }
-            queue.markDone(pageIndex);
-        } else if (pageIndex != 0 || processedCount == 0) {
-            // Background: thumb only
-            auto thumbStart = std::chrono::steady_clock::now();
-            std::vector<uint8_t> entryData;
-            std::string entryName = backend->entryName(pageIndex);
-            std::string idx = formatIndex(pageIndex);
-            std::string thumbFile = "thumbs/" + idx + ".jpg";
+            if (cancelled) break;
 
-            if (!backend->getEntry(pageIndex, entryData) || entryData.empty()) {
-                queue.markThumbOnly(pageIndex);
+            // Get next work item
+            bool needsPage = false;
+            int pageIndex = queue.next(needsPage);
+
+            if (pageIndex < 0) {
+#ifndef _WIN32
+                struct pollfd pfd;
+                pfd.fd = STDIN_FILENO;
+                pfd.events = POLLIN;
+                poll(&pfd, 1, 100);
+#endif
                 continue;
             }
-            VipsImage* thumb = nullptr;
-            if (vips_thumbnail_buffer(
-                    const_cast<void*>(static_cast<const void*>(entryData.data())),
-                    entryData.size(), &thumb, config.thumbWidth,
-                    "height", config.thumbWidth * 3 / 2,
-                    "size", VIPS_SIZE_DOWN, nullptr) == 0) {
-                vips_jpegsave(thumb, (args.output + "/" + thumbFile).c_str(),
-                    "Q", config.thumbQuality, nullptr);
-                g_object_unref(thumb);
+
+            if (needsPage) {
+                if (processPageAtIndex(*backend, pageIndex)) {
+                    processedCount++;
+                    if (processedCount % 25 == 0) {
+                        char label[64];
+                        std::snprintf(label, sizeof(label), "processed=%d", processedCount);
+                        logWorkerMemoryWithQueue(label, queue, processedCount);
+                    }
+                }
+                queue.markDone(pageIndex);
+            } else if (pageIndex != 0 || processedCount == 0) {
+                // Background: thumb only
+                auto thumbStart = std::chrono::steady_clock::now();
+                std::vector<uint8_t> entryData;
+                std::string entryName = backend->entryName(pageIndex);
+                std::string idx = formatIndex(pageIndex);
+                std::string thumbFile = "thumbs/" + idx + ".jpg";
+
+                if (!backend->getEntry(pageIndex, entryData) || entryData.empty()) {
+                    queue.markThumbOnly(pageIndex);
+                    continue;
+                }
+                VipsImage* thumb = nullptr;
+                if (vips_thumbnail_buffer(
+                        const_cast<void*>(static_cast<const void*>(entryData.data())),
+                        entryData.size(), &thumb, config.thumbWidth,
+                        "height", config.thumbWidth * 3 / 2,
+                        "size", VIPS_SIZE_DOWN, nullptr) == 0) {
+                    vips_jpegsave(thumb, (args.output + "/" + thumbFile).c_str(),
+                        "Q", config.thumbQuality, nullptr);
+                    g_object_unref(thumb);
+                }
+                auto thumbEnd = std::chrono::steady_clock::now();
+                totalBackgroundThumbMs += std::chrono::duration<double, std::milli>(thumbEnd - thumbStart).count();
+                backgroundThumbCount++;
+                emitProgress(pageIndex, totalEntries, "thumb", thumbFile);
+                queue.markThumbOnly(pageIndex);
             }
-            auto thumbEnd = std::chrono::steady_clock::now();
-            totalBackgroundThumbMs += std::chrono::duration<double, std::milli>(thumbEnd - thumbStart).count();
-            backgroundThumbCount++;
-            emitProgress(pageIndex, totalEntries, "thumb", thumbFile);
-            queue.markThumbOnly(pageIndex);
         }
     }
 

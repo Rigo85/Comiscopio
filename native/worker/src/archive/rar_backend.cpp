@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <csignal>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -53,10 +54,12 @@ public:
         extractedEntries.reserve(1024);
 
         openArchive(archivePath, [&](HANDLE hArc) {
+            auto* cancelContext = reinterpret_cast<ArchiveCancelContext*>(userData);
+            cancelFlag = cancelContext ? cancelContext->flag : nullptr;
             RARHeaderDataEx header{};
             int imageCount = 0;
 
-            while (RARReadHeaderEx(hArc, &header) == 0) {
+            while (!isCancelled() && RARReadHeaderEx(hArc, &header) == 0) {
                 std::string name(header.FileName);
                 const bool isDir = (header.Flags & RHDF_DIRECTORY) != 0;
                 const bool isImage = !isDir && isImageFile(name);
@@ -77,6 +80,10 @@ public:
                 const int result = RARProcessFile(hArc, RAR_TEST, nullptr, nullptr);
                 finishStreamingWrite(result == 0);
 
+                if (isCancelled()) {
+                    break;
+                }
+
                 if (result == 0 && lastWriteOk && fs::exists(rawPath)) {
                     extractedEntries.push_back({name, rawPath});
                 } else {
@@ -89,6 +96,7 @@ public:
                 imageCount++;
             }
         });
+        cancelFlag = nullptr;
 
         entries = sortAndRename(rawDir, std::move(extractedEntries));
         return static_cast<int>(entries.size());
@@ -241,10 +249,18 @@ private:
         lastWriteOk = true;
     }
 
+    bool isCancelled() const {
+        return cancelFlag && *cancelFlag != 0;
+    }
+
     static int CALLBACK extractCallback(UINT msg, LPARAM userData, LPARAM p1, LPARAM p2) {
         if (msg != UCM_PROCESSDATA) return 1;
 
         auto* self = reinterpret_cast<RarBackend*>(userData);
+        if (self->isCancelled()) {
+            self->lastWriteOk = false;
+            return -1;
+        }
         if (!self->currentOutput.is_open()) {
             self->lastWriteOk = false;
             return -1;
@@ -304,6 +320,7 @@ private:
     std::ofstream currentOutput;
     std::string currentOutputPath;
     bool lastWriteOk = true;
+    volatile sig_atomic_t* cancelFlag = nullptr;
 };
 
 std::unique_ptr<ArchiveBackend> createRarBackend() {

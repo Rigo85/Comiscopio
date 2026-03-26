@@ -1,8 +1,13 @@
 #pragma once
 
+#include <csignal>
 #include <cstdint>
 #include <string>
 #include <vector>
+
+struct ArchiveCancelContext {
+    volatile sig_atomic_t* flag = nullptr;
+};
 
 /**
  * Abstract interface for archive backends.

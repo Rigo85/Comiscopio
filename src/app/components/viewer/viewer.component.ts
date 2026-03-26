@@ -452,6 +452,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
           this.error.set(event.message || 'Error del worker');
           this.openingFileHash = null;
           this.openingSessionId = null;
+          this.resetViewerState();
         }
         break;
 
@@ -731,6 +732,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
       this.openingFileHash = null;
       this.openingSessionId = null;
       this.clearPreviewProbe();
+      this.resetViewerState();
       this.loading.set(false);
       this.loadingMessage.set('Abriendo archivo...');
     }
@@ -881,6 +883,22 @@ export class ViewerComponent implements OnInit, OnDestroy {
     } else {
       this.openingSessionId = null;
     }
+  }
+
+  private resetViewerState(): void {
+    this.pageCache.clear();
+    this.thumbnailCache.clear();
+    this.fileState.set(null);
+    this.currentPageUrl.set(null);
+    this.secondPageUrl.set(null);
+    this.currentPageIndex.set(0);
+    this.currentPageMeta = null;
+    this.pageSource.set('optimized');
+    this.previewInitializedHash = null;
+    this.currentImageRetryKey = null;
+    this.secondImageRetryKey = null;
+    this.clearPreviewProbe();
+    this.zoomPan.resetAll();
   }
 
   private async loadRecentFiles(): Promise<void> {

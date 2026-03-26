@@ -109,7 +109,12 @@
         }
       ],
       "category": "Graphics",
-      "icon": "resources/icon.png",
+      "icon": "resources/icon-1024.png",
+      "desktop": {
+        "entry": {
+          "StartupWMClass": "comiscopio"
+        }
+      },
       "mimeTypes": [
         "application/x-cbz",
         "application/x-cbr",
