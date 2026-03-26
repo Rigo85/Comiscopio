@@ -1,8 +1,14 @@
 {
   "name": "comiscopio",
   "version": "0.1.0",
-  "description": "Comic and manga viewer — Electron + Angular",
-  "author": "Comiscopio",
+  "description": "Visor de comics y manga",
+  "author": "Rigoberto L. Salgado Reyes <rlsalgado2006@gmail.com>",
+  "license": "AGPL-3.0-or-later",
+  "homepage": "https://github.com/Rigo85/Comiscopio",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Rigo85/Comiscopio.git"
+  },
   "main": "dist-electron/electron/main.js",
   "scripts": {
     "ng": "ng",

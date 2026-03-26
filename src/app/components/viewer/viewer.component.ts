@@ -10,6 +10,7 @@ import { ContextMenuComponent, ContextMenuAction } from '../context-menu/context
 import { ThumbnailsComponent } from '../thumbnails/thumbnails.component';
 import type { RecentFile } from '../../../../shared/models';
 import type { KeyBinding } from '../../../../shared/keybindings';
+import { APP_METADATA } from '../../../../shared/app-metadata';
 
 interface FileState {
   fileHash: string;
@@ -74,6 +75,39 @@ interface ShortcutSection {
                 </div>
               </section>
             }
+          </div>
+        </div>
+      </div>
+    }
+
+    @if (showAbout()) {
+      <div class="viewer-overlay" (click)="showAbout.set(false)">
+        <div class="about-modal" (click)="$event.stopPropagation()">
+          <div class="about-header">
+            <div>
+              <h2>{{ appMetadata.name }}</h2>
+              <p>{{ appMetadata.description }}</p>
+            </div>
+            <button class="about-close" (click)="showAbout.set(false)" title="Cerrar">Cerrar</button>
+          </div>
+
+          <div class="about-content">
+            <div class="about-row">
+              <span class="about-label">Version</span>
+              <span class="about-value">{{ appMetadata.version }}</span>
+            </div>
+            <div class="about-row">
+              <span class="about-label">Autor</span>
+              <span class="about-value">{{ appMetadata.author }}</span>
+            </div>
+            <div class="about-row">
+              <span class="about-label">Licencia</span>
+              <span class="about-value">{{ appMetadata.license }}</span>
+            </div>
+            <div class="about-row about-row-stack">
+              <span class="about-label">Repositorio</span>
+              <code class="about-code">{{ appMetadata.repositoryUrl }}</code>
+            </div>
           </div>
         </div>
       </div>
@@ -390,6 +424,66 @@ interface ShortcutSection {
       font-size: 0.85rem;
       white-space: nowrap;
     }
+    .about-modal {
+      width: min(560px, calc(100vw - 32px));
+      background: #252525;
+      border: 1px solid #444;
+      border-radius: 10px;
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+      color: #ddd;
+    }
+    .about-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 16px 18px 12px;
+      border-bottom: 1px solid #3a3a3a;
+      h2 { margin: 0 0 4px; font-size: 1.1rem; color: #f4f4f4; }
+      p { margin: 0; color: #aaa; font-size: 0.95rem; }
+    }
+    .about-close {
+      padding: 6px 12px; background: #333; color: #ddd;
+      border: 1px solid #555; border-radius: 6px; cursor: pointer;
+      &:hover { background: #3d3d3d; }
+    }
+    .about-content {
+      padding: 16px 18px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .about-row {
+      display: grid;
+      grid-template-columns: 110px 1fr;
+      gap: 12px;
+      align-items: start;
+    }
+    .about-row-stack {
+      grid-template-columns: 1fr;
+    }
+    .about-label {
+      color: #8fa0c4;
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .about-value {
+      color: #ddd;
+      font-size: 0.95rem;
+    }
+    .about-code {
+      display: block;
+      padding: 8px 10px;
+      background: #1b1b1b;
+      border: 1px solid #333;
+      border-radius: 8px;
+      color: #d9d9d9;
+      font: inherit;
+      font-size: 0.9rem;
+      white-space: normal;
+      word-break: break-word;
+    }
     .goto-overlay {
       position: absolute; inset: 0; display: flex; align-items: center;
       justify-content: center; background: rgba(0, 0, 0, 0.5); z-index: 20;
@@ -415,12 +509,14 @@ export class ViewerComponent implements OnInit, OnDestroy {
   isDragOver = signal(false);
   showGoToPage = signal(false);
   showShortcuts = signal(false);
+  showAbout = signal(false);
   showThumbnails = signal(true);
   isAlwaysOnTop = signal(false);
   isFullscreen = signal(false);
   recentFiles = signal<RecentFile[]>([]);
   pageSource = signal<PageArtifactSource>('optimized');
   shortcuts = signal<KeyBinding[]>([]);
+  readonly appMetadata = APP_METADATA;
   shortcutSections = computed<ShortcutSection[]>(() => {
     const groups: Array<{ title: string; actions: string[] }> = [
       { title: 'Archivo', actions: ['open-file', 'close-file', 'new-window'] },
@@ -644,6 +740,9 @@ export class ViewerComponent implements OnInit, OnDestroy {
       case 'shortcuts':
         this.showShortcuts.set(true);
         return;
+      case 'about':
+        this.showAbout.set(true);
+        return;
     }
 
     const actionMap: Record<string, string> = {
@@ -677,6 +776,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
       return;
     }
     if (event.key === 'Escape') {
+      if (this.showAbout()) { this.showAbout.set(false); return; }
       if (this.showShortcuts()) { this.showShortcuts.set(false); return; }
       if (this.showGoToPage()) { this.showGoToPage.set(false); return; }
       if (this.showThumbnails()) { this.showThumbnails.set(false); return; }
@@ -769,7 +869,14 @@ export class ViewerComponent implements OnInit, OnDestroy {
       this.zoomPan.zoomAtPoint(event.deltaY > 0 ? -0.1 : 0.1, event.clientX - r.left, event.clientY - r.top, r.width, r.height);
       return;
     }
-    if (event.deltaY > 0) this.nextPage(); else if (event.deltaY < 0) this.prevPage();
+    if (this.readerState.isVertical()) {
+      return;
+    }
+    if (event.deltaY > 0) {
+      this.readerState.isReversed() ? this.prevPage() : this.nextPage();
+    } else if (event.deltaY < 0) {
+      this.readerState.isReversed() ? this.nextPage() : this.prevPage();
+    }
   }
 
   // --- Pan ---
@@ -920,6 +1027,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
       this.currentImageRetryKey = null;
       this.currentPageUrl.set(this.pageCache.isReady(index) ? this.buildPageUrl(index, this.pageSource()) : null);
       this.zoomPan.resetOnPageChange();
+      this.resetReaderScrollPosition();
       this.loadSecondPage(index);
       this.saveProgress(s, index);
     } finally {
@@ -971,6 +1079,21 @@ export class ViewerComponent implements OnInit, OnDestroy {
   private refreshCurrentPage(): void {
     this.navigating = false;
     this.goToPage(this.currentPageIndex());
+  }
+
+  private resetReaderScrollPosition(): void {
+    const container = this.viewerContainer?.nativeElement;
+    if (!container) return;
+
+    container.scrollTop = 0;
+    container.scrollLeft = 0;
+
+    requestAnimationFrame(() => {
+      const currentContainer = this.viewerContainer?.nativeElement;
+      if (!currentContainer) return;
+      currentContainer.scrollTop = 0;
+      currentContainer.scrollLeft = 0;
+    });
   }
 
   private closeCurrentFile(reason = 'manual'): void {

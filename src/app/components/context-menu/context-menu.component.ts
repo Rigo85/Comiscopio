@@ -16,6 +16,7 @@ export interface ContextMenuAction {
     | 'close-file'
     | 'new-window'
     | 'shortcuts'
+    | 'about'
     | 'add-bookmark'
     | 'goto-bookmark'
 
@@ -181,6 +182,7 @@ export class ContextMenuComponent {
     items.push({ label: 'Abrir carpeta...', action: { type: 'open-folder' } });
     items.push({ label: 'Nueva ventana', action: { type: 'new-window' } });
     items.push({ label: 'Atajos...', action: { type: 'shortcuts' } });
+    items.push({ label: 'Acerca de...', action: { type: 'about' } });
 
     if (this.hasFile()) {
       items.push({ separator: true });
