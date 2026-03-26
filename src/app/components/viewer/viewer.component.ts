@@ -12,6 +12,7 @@ import type { RecentFile } from '../../../../shared/models';
 
 interface FileState {
   fileHash: string;
+  sessionId: string;
   fileName: string;
   filePath: string;
   totalPages: number;
@@ -41,13 +42,20 @@ interface FileState {
       </div>
     }
 
+    @if (isDragOver()) {
+      <div
+        class="drag-drop-overlay"
+        (dragenter)="onDragEnter($event)"
+        (dragover)="onDragOver($event)"
+        (dragleave)="onDragLeave($event)"
+        (drop)="onDrop($event)"
+      ></div>
+    }
+
     @if (!fileState()) {
       <div
         class="viewer-container"
         [class.drag-over]="isDragOver()"
-        (dragover)="onDragOver($event)"
-        (dragleave)="onDragLeave($event)"
-        (drop)="onDrop($event)"
         (contextmenu)="onContextMenu($event)"
       >
         <div class="viewer-welcome">
@@ -77,9 +85,6 @@ interface FileState {
         [class.vertical-mode]="readerState.isVertical()"
         [class.zoomed]="zoomPan.isZoomed()"
         [class.zen-mode]="zenMode()"
-        (dragover)="onDragOver($event)"
-        (dragleave)="onDragLeave($event)"
-        (drop)="onDrop($event)"
         (mousedown)="onPanStart($event)"
         (mousemove)="onPanMove($event)"
         (mouseup)="onPanEnd()"
@@ -266,6 +271,11 @@ interface FileState {
       position: absolute; inset: 0; display: flex; align-items: center;
       justify-content: center; background: rgba(0, 0, 0, 0.7); z-index: 10;
     }
+    .drag-drop-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 60;
+    }
     .viewer-loading {
       color: #aaa; font-size: 1.1rem;
       display: flex; flex-direction: column; align-items: center; gap: 12px;
@@ -317,10 +327,12 @@ export class ViewerComponent implements OnInit, OnDestroy {
   private lastPanX = 0;
   private lastPanY = 0;
   private openingFileHash: string | null = null;
+  private openingSessionId: string | null = null;
   private previewInitializedHash: string | null = null;
   private currentImageRetryKey: string | null = null;
   private secondImageRetryKey: string | null = null;
   private previewProbeTimer: ReturnType<typeof setTimeout> | null = null;
+  private postCloseTimers: Array<ReturnType<typeof setTimeout>> = [];
 
   isDoublePage = computed(() => {
     return this.readerState.pageLayout() === 'double'
@@ -344,6 +356,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
   private unsubWindowState?: () => void;
   private unsubWorkerEvent?: () => void;
   private navigating = false;
+  private dragDepth = 0;
 
   constructor(
     private electron: ElectronService,
@@ -378,10 +391,12 @@ export class ViewerComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.reportRendererStats('destroy');
+    this.clearPostCloseDiagnostics();
     this.unsubFileOpened?.();
     this.unsubWindowState?.();
     this.unsubWorkerEvent?.();
-    this.closeCurrentFile();
+    this.closeCurrentFile('destroy');
   }
 
   // --- Worker events ---
@@ -436,6 +451,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
           this.loading.set(false);
           this.error.set(event.message || 'Error del worker');
           this.openingFileHash = null;
+          this.openingSessionId = null;
         }
         break;
 
@@ -447,6 +463,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
 
   private async completeOpen(fileHash: string, totalPages: number): Promise<void> {
     this.openingFileHash = null;
+    this.openingSessionId = null;
 
     const settings = await this.electron.getSettings();
     this.readerState.applySettings(settings);
@@ -469,6 +486,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
 
     this.loading.set(false);
     this.loadingMessage.set('Abriendo archivo...');
+    this.reportRendererStats('open-complete');
 
     this.goToPage(startPage);
   }
@@ -574,7 +592,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
 
     switch (action) {
       case 'open-file': this.openFileDialog(); break;
-      case 'close-file': this.closeCurrentFile(); break;
+      case 'close-file': this.closeCurrentFile('manual'); break;
       case 'new-window': this.electron.newWindow(); break;
       case 'next-page':
         if (!this.fileState()) break;
@@ -655,13 +673,41 @@ export class ViewerComponent implements OnInit, OnDestroy {
   }
   onPanEnd(): void { this.isPanning = false; }
 
+  @HostListener('window:dragenter', ['$event'])
+  onWindowDragEnter(event: DragEvent): void {
+    this.handleGlobalDragEnter(event);
+  }
+
+  @HostListener('window:dragover', ['$event'])
+  onWindowDragOver(event: DragEvent): void {
+    this.handleGlobalDragOver(event);
+  }
+
+  @HostListener('window:dragleave', ['$event'])
+  onWindowDragLeave(event: DragEvent): void {
+    this.handleGlobalDragLeave(event);
+  }
+
+  @HostListener('window:drop', ['$event'])
+  onWindowDrop(event: DragEvent): void {
+    this.handleGlobalDrop(event);
+  }
+
   // --- Drag & Drop ---
-  onDragOver(event: DragEvent): void { event.preventDefault(); event.stopPropagation(); this.isDragOver.set(true); }
-  onDragLeave(event: DragEvent): void { event.preventDefault(); event.stopPropagation(); this.isDragOver.set(false); }
+  onDragEnter(event: DragEvent): void {
+    this.handleGlobalDragEnter(event);
+  }
+
+  onDragOver(event: DragEvent): void {
+    this.handleGlobalDragOver(event);
+  }
+
+  onDragLeave(event: DragEvent): void {
+    this.handleGlobalDragLeave(event);
+  }
+
   onDrop(event: DragEvent): void {
-    event.preventDefault(); event.stopPropagation(); this.isDragOver.set(false);
-    const filePath = this.extractDroppedPath(event);
-    if (filePath) this.openFile(filePath);
+    this.handleGlobalDrop(event);
   }
 
   // --- File operations ---
@@ -678,8 +724,12 @@ export class ViewerComponent implements OnInit, OnDestroy {
 
   cancelOpen(): void {
     if (this.openingFileHash) {
-      this.electron.workerClose(this.openingFileHash);
+      this.electron.workerClose(this.openingFileHash, {
+        sessionId: this.openingSessionId ?? undefined,
+        reason: 'cancel-open',
+      });
       this.openingFileHash = null;
+      this.openingSessionId = null;
       this.clearPreviewProbe();
       this.loading.set(false);
       this.loadingMessage.set('Abriendo archivo...');
@@ -688,7 +738,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
 
   async openFile(filePath: string): Promise<void> {
     if (this.openingFileHash) { this.cancelOpen(); }
-    this.closeCurrentFile();
+    this.closeCurrentFile('open-replace');
 
     this.loading.set(true);
     this.loadingMessage.set('Preparando archivo...');
@@ -697,9 +747,11 @@ export class ViewerComponent implements OnInit, OnDestroy {
     try {
       const result = await this.electron.workerStart(filePath);
       this.openingFileHash = result.fileHash;
+      this.openingSessionId = result.sessionId;
 
       this.fileState.set({
         fileHash: result.fileHash,
+        sessionId: result.sessionId,
         fileName: result.fileName,
         filePath: result.filePath,
         totalPages: result.totalPages || 0,
@@ -716,6 +768,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
       this.error.set(err.message || 'Error al abrir el archivo');
       this.fileState.set(null);
       this.openingFileHash = null;
+      this.openingSessionId = null;
     }
   }
 
@@ -800,25 +853,33 @@ export class ViewerComponent implements OnInit, OnDestroy {
     this.goToPage(this.currentPageIndex());
   }
 
-  private closeCurrentFile(): void {
+  private closeCurrentFile(reason = 'manual'): void {
     const s = this.fileState();
+    this.clearPostCloseDiagnostics();
+    if (s) {
+      this.reportRendererStats('close-begin', { reason });
+    }
     this.thumbnailCache.clear();
     if (s) {
       this.pageCache.clear();
-    this.currentPageUrl.set(null);
-    this.secondPageUrl.set(null);
+      this.currentPageUrl.set(null);
+      this.secondPageUrl.set(null);
       this.currentPageIndex.set(0);
       this.currentPageMeta = null;
       this.fileState.set(null);
       this.pageSource.set('optimized');
       this.previewInitializedHash = null;
+      this.openingSessionId = null;
       this.currentImageRetryKey = null;
       this.secondImageRetryKey = null;
       this.clearPreviewProbe();
       this.zoomPan.resetAll();
-      this.showThumbnails.set(false);
-      this.electron.workerClose(s.fileHash);
+      this.electron.workerClose(s.fileHash, { sessionId: s.sessionId, reason });
+      this.reportRendererStats('close-after-worker-close', { reason, sessionId: s.sessionId });
+      this.schedulePostCloseDiagnostics(reason, s.sessionId);
       this.loadRecentFiles();
+    } else {
+      this.openingSessionId = null;
     }
   }
 
@@ -833,6 +894,67 @@ export class ViewerComponent implements OnInit, OnDestroy {
       if (typeof p === 'string' && p.length > 0) return p;
     }
     return null;
+  }
+
+  private hasFileDrag(event: DragEvent): boolean {
+    const files = event.dataTransfer?.files;
+    if (files && files.length > 0) return true;
+
+    const items = event.dataTransfer?.items;
+    if (items && Array.from(items).some((item) => item.kind === 'file')) return true;
+
+    const types = event.dataTransfer?.types;
+    if (!types) return false;
+    return Array.from(types).some((type) =>
+      type === 'Files' ||
+      type.toLowerCase().includes('file') ||
+      type === 'application/x-moz-file'
+    );
+  }
+
+  private handleGlobalDragEnter(event: DragEvent): void {
+    if (!event.dataTransfer) return;
+    event.preventDefault();
+    this.dragDepth += 1;
+    if (this.hasFileDrag(event)) {
+      this.isDragOver.set(true);
+    }
+  }
+
+  private handleGlobalDragOver(event: DragEvent): void {
+    if (!event.dataTransfer) return;
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'copy';
+    }
+    if (this.hasFileDrag(event)) {
+      this.isDragOver.set(true);
+    }
+  }
+
+  private handleGlobalDragLeave(event: DragEvent): void {
+    if (!event.dataTransfer) return;
+    event.preventDefault();
+    this.dragDepth = Math.max(0, this.dragDepth - 1);
+
+    if (event.target === document.documentElement || event.target === document.body) {
+      this.dragDepth = 0;
+    }
+
+    if (this.dragDepth === 0) {
+      this.isDragOver.set(false);
+    }
+  }
+
+  private handleGlobalDrop(event: DragEvent): void {
+    if (!event.dataTransfer) return;
+    event.preventDefault();
+    this.dragDepth = 0;
+    this.isDragOver.set(false);
+    const filePath = this.extractDroppedPath(event);
+    if (filePath) {
+      void this.openFile(filePath);
+    }
   }
 
   private saveProgress(state: FileState, page: number): void {
@@ -881,6 +1003,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
     this.previewInitializedHash = fileHash;
     this.clearPreviewProbe();
     this.fileState.update(s => s ? { ...s, totalPages: Math.max(s.totalPages, pageIndex + 1) } : s);
+    this.reportRendererStats('preview-ready');
   }
 
   private schedulePreviewProbe(fileHash: string, attempt = 0): void {
@@ -918,6 +1041,22 @@ export class ViewerComponent implements OnInit, OnDestroy {
     }
   }
 
+  private schedulePostCloseDiagnostics(reason: string, sessionId: string | null): void {
+    for (const delay of [250, 1000, 3000]) {
+      const timer = setTimeout(() => {
+        this.reportRendererStats(`close-post-${delay}ms`, { reason, sessionId });
+      }, delay);
+      this.postCloseTimers.push(timer);
+    }
+  }
+
+  private clearPostCloseDiagnostics(): void {
+    for (const timer of this.postCloseTimers) {
+      clearTimeout(timer);
+    }
+    this.postCloseTimers = [];
+  }
+
   private buildPageUrl(pageIndex: number, source: PageArtifactSource, retry = 0): string {
     const base = this.pageCache.getPageUrl(pageIndex, source);
     return retry > 0 ? `${base}&view=${retry}` : base;
@@ -941,5 +1080,84 @@ export class ViewerComponent implements OnInit, OnDestroy {
     }
     this.secondImageRetryKey = key;
     this.secondPageUrl.set(this.buildPageUrl(pageIndex, this.pageSource(), 1));
+  }
+
+  private reportRendererStats(label: string, extra: Record<string, unknown> = {}): void {
+    if (!this.electron.isElectron) return;
+
+    const perfMemory = (performance as any).memory;
+    const pageStats = this.pageCache.stats;
+    const thumbnailReady = (this.thumbnailCache as any).readyThumbs?.size ?? 0;
+    const thumbnailVersionCount = (this.thumbnailCache as any).thumbVersions?.size ?? 0;
+    const thumbnailList = document.querySelector('.thumbnails-list') as HTMLElement | null;
+    const thumbnailItems = Array.from(document.querySelectorAll('.thumbnail-item')) as HTMLElement[];
+    const thumbnailImgs = Array.from(document.querySelectorAll('.thumbnail-item img')) as HTMLImageElement[];
+    const thumbnailPlaceholders = document.querySelectorAll('.thumbnail-placeholder').length;
+    const pageImages = Array.from(document.querySelectorAll('.viewer-image')) as HTMLImageElement[];
+    const visiblePageImgs = pageImages.length;
+    const thumbnailViewportRect = thumbnailList?.getBoundingClientRect() ?? null;
+    const pageImageRects = pageImages.map((img) => img.getBoundingClientRect());
+    const pageImageNaturalWidths = pageImages.map((img) => img.naturalWidth || 0);
+    const pageImageNaturalHeights = pageImages.map((img) => img.naturalHeight || 0);
+    const pageImageClientWidths = pageImageRects.map((rect) => Math.round(rect.width));
+    const pageImageClientHeights = pageImageRects.map((rect) => Math.round(rect.height));
+    const activePageUrls = pageImages
+      .map((img) => img.currentSrc || img.src || '')
+      .filter((url) => !!url);
+    const currentPageMeta = this.currentPageMeta;
+    const secondPageMeta = this.fileState()
+      ? this.pageCache.getPageMeta(this.currentPageIndex() + 1, this.pageSource())
+      : null;
+    const thumbnailItemsInViewport = thumbnailList
+      ? thumbnailItems.filter((item) => {
+          const rect = item.getBoundingClientRect();
+          return rect.bottom > thumbnailViewportRect!.top && rect.top < thumbnailViewportRect!.bottom;
+        }).length
+      : 0;
+    const thumbnailImgsInViewport = thumbnailList
+      ? thumbnailImgs.filter((img) => {
+          const rect = img.getBoundingClientRect();
+          return rect.bottom > thumbnailViewportRect!.top && rect.top < thumbnailViewportRect!.bottom;
+        }).length
+      : 0;
+
+    this.electron.reportRendererStats({
+      label,
+      sessionId: this.fileState()?.sessionId ?? this.openingSessionId ?? '',
+      hasFile: !!this.fileState(),
+      currentPage: this.currentPageIndex(),
+      totalPages: this.fileState()?.totalPages ?? 0,
+      showThumbnails: this.showThumbnails(),
+      isDoublePage: this.isDoublePage(),
+      pageSource: this.pageSource(),
+      pageReady: pageStats.readyPages,
+      pageTotal: pageStats.totalPages,
+      thumbReady: thumbnailReady,
+      thumbVersioned: thumbnailVersionCount,
+      thumbnailItemsDom: thumbnailItems.length,
+      thumbnailImgsDom: thumbnailImgs.length,
+      thumbnailPlaceholdersDom: thumbnailPlaceholders,
+      thumbnailItemsInViewport,
+      thumbnailImgsInViewport,
+      thumbnailScrollTop: thumbnailList?.scrollTop ?? 0,
+      thumbnailViewportHeight: thumbnailList?.clientHeight ?? 0,
+      thumbnailScrollHeight: thumbnailList?.scrollHeight ?? 0,
+      visiblePageImgs,
+      pageImageNaturalWidths: pageImageNaturalWidths.join(','),
+      pageImageNaturalHeights: pageImageNaturalHeights.join(','),
+      pageImageClientWidths: pageImageClientWidths.join(','),
+      pageImageClientHeights: pageImageClientHeights.join(','),
+      activePageUrlCount: activePageUrls.length,
+      currentPageUrlActive: this.currentPageUrl() ? 1 : 0,
+      secondPageUrlActive: this.secondPageUrl() ? 1 : 0,
+      currentPageMetaWidth: currentPageMeta?.width ?? 0,
+      currentPageMetaHeight: currentPageMeta?.height ?? 0,
+      secondPageMetaWidth: secondPageMeta?.width ?? 0,
+      secondPageMetaHeight: secondPageMeta?.height ?? 0,
+      jsHeapUsed: perfMemory?.usedJSHeapSize ?? 0,
+      jsHeapTotal: perfMemory?.totalJSHeapSize ?? 0,
+      jsHeapLimit: perfMemory?.jsHeapSizeLimit ?? 0,
+      ...extra,
+    });
   }
 }

@@ -22,6 +22,7 @@ const validInvokeChannels = new Set([
 const validSendChannels = new Set([
   IpcChannels.WORKER_FOCUS,
   IpcChannels.WORKER_CLOSE,
+  IpcChannels.REPORT_RENDERER_STATS,
   IpcChannels.WINDOW_MINIMIZE,
   IpcChannels.WINDOW_MAXIMIZE,
   IpcChannels.WINDOW_CLOSE,

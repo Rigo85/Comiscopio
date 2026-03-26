@@ -9,9 +9,11 @@
 #include <nlohmann/json.hpp>
 
 #include <chrono>
+#include <cstdarg>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -25,6 +27,53 @@
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
+
+static constexpr double kSlowPageLogThresholdMs = 400.0;
+
+static std::string isoTimestampUtc() {
+    using namespace std::chrono;
+    const auto now = system_clock::now();
+    const auto seconds = time_point_cast<std::chrono::seconds>(now);
+    const auto millis = duration_cast<milliseconds>(now - seconds).count();
+    const std::time_t timeValue = system_clock::to_time_t(now);
+    std::tm tmUtc{};
+#ifdef _WIN32
+    gmtime_s(&tmUtc, &timeValue);
+#else
+    gmtime_r(&timeValue, &tmUtc);
+#endif
+
+    char buffer[80];
+    std::snprintf(
+        buffer,
+        sizeof(buffer),
+        "%04d-%02d-%02dT%02d:%02d:%02d.%03lldZ",
+        tmUtc.tm_year + 1900,
+        tmUtc.tm_mon + 1,
+        tmUtc.tm_mday,
+        tmUtc.tm_hour,
+        tmUtc.tm_min,
+        tmUtc.tm_sec,
+        static_cast<long long>(millis));
+    return std::string(buffer);
+}
+
+static void logDiagnosticV(const char* level, const char* source, const char* event, const char* fmt, va_list args) {
+    std::fputs(("ts=" + isoTimestampUtc()).c_str(), stderr);
+    std::fprintf(stderr, " level=%s source=%s event=%s", level, source, event);
+    if (fmt && fmt[0] != '\0') {
+        std::fputc(' ', stderr);
+        std::vfprintf(stderr, fmt, args);
+    }
+    std::fputc('\n', stderr);
+}
+
+static void logDiagnostic(const char* level, const char* source, const char* event, const char* fmt = "", ...) {
+    va_list args;
+    va_start(args, fmt);
+    logDiagnosticV(level, source, event, fmt, args);
+    va_end(args);
+}
 
 extern std::unique_ptr<ArchiveBackend> createRarBackend();
 extern std::unique_ptr<ArchiveBackend> createZipBackend();
@@ -103,7 +152,7 @@ static bool readStdinCommand(json& outCmd) {
         std::string line;
         if (std::getline(std::cin, line) && !line.empty()) {
             try { outCmd = json::parse(line); return true; }
-            catch (...) { fprintf(stderr, "[worker] Bad JSON: %s\n", line.c_str()); }
+            catch (...) { logDiagnostic("warn", "worker", "bad_json", "line=%s", json(line).dump().c_str()); }
         }
     }
     return false;
@@ -132,8 +181,55 @@ static void extractionProgress(int current, int total, const std::string& name, 
     fflush(stdout);
 
     if (current % 50 == 0) {
-        fprintf(stderr, "[worker] Extracting %d: %s\n", current + 1, name.c_str());
+        logDiagnostic("info", "worker", "extracting_progress", "current=%d name=%s", current + 1, json(name).dump().c_str());
     }
+}
+
+struct ProcMemorySnapshot {
+    long vmRssKb = 0;
+    long vmHwmKb = 0;
+    long vmSizeKb = 0;
+};
+
+static ProcMemorySnapshot readProcMemorySnapshot() {
+    ProcMemorySnapshot snapshot;
+#ifndef _WIN32
+    std::ifstream status("/proc/self/status");
+    std::string line;
+    while (std::getline(status, line)) {
+        if (line.rfind("VmRSS:", 0) == 0) std::sscanf(line.c_str(), "VmRSS:%ld kB", &snapshot.vmRssKb);
+        else if (line.rfind("VmHWM:", 0) == 0) std::sscanf(line.c_str(), "VmHWM:%ld kB", &snapshot.vmHwmKb);
+        else if (line.rfind("VmSize:", 0) == 0) std::sscanf(line.c_str(), "VmSize:%ld kB", &snapshot.vmSizeKb);
+    }
+#endif
+    return snapshot;
+}
+
+static void logWorkerMemory(const char* label) {
+    ProcMemorySnapshot snapshot = readProcMemorySnapshot();
+    logDiagnostic("info", "worker_mem", "snapshot",
+        "label=%s rss=%.1fMB hwm=%.1fMB vms=%.1fMB",
+        label,
+        snapshot.vmRssKb / 1024.0,
+        snapshot.vmHwmKb / 1024.0,
+        snapshot.vmSizeKb / 1024.0);
+}
+
+static void logWorkerMemoryWithQueue(const char* label, const WorkQueue& queue, int processedCount) {
+    ProcMemorySnapshot snapshot = readProcMemorySnapshot();
+    logDiagnostic("info", "worker_mem", "snapshot",
+        "label=%s rss=%.1fMB hwm=%.1fMB vms=%.1fMB processed=%d "
+        "priorityPending=%d queueSize=%d bgNext=%d donePages=%d doneThumb=%d",
+        label,
+        snapshot.vmRssKb / 1024.0,
+        snapshot.vmHwmKb / 1024.0,
+        snapshot.vmSizeKb / 1024.0,
+        processedCount,
+        queue.priorityRemaining(),
+        queue.queuedItems(),
+        queue.backgroundProgress(),
+        queue.donePageCount(),
+        queue.doneThumbOnlyCount());
 }
 
 int main(int argc, char* argv[]) {
@@ -141,15 +237,15 @@ int main(int argc, char* argv[]) {
     if (!parseArgs(argc, argv, args)) return 1;
 
     if (!fs::exists(args.input)) {
-        fprintf(stderr, "Error: input not found: %s\n", args.input.c_str());
+        logDiagnostic("error", "worker", "input_not_found", "input=%s", json(args.input).dump().c_str());
         return 1;
     }
     if (args.backend != "rar" && args.backend != "zip") {
-        fprintf(stderr, "Error: unsupported backend '%s'\n", args.backend.c_str());
+        logDiagnostic("error", "worker", "unsupported_backend", "backend=%s", json(args.backend).dump().c_str());
         return 1;
     }
     if (args.readerFormat != "webp" && args.readerFormat != "jpeg") {
-        fprintf(stderr, "Error: unsupported reader format '%s'\n", args.readerFormat.c_str());
+        logDiagnostic("error", "worker", "unsupported_reader_format", "readerFormat=%s", json(args.readerFormat).dump().c_str());
         return 1;
     }
 
@@ -157,7 +253,7 @@ int main(int argc, char* argv[]) {
     signal(SIGINT, signalHandler);
 
     if (VIPS_INIT(argv[0]) != 0) {
-        fprintf(stderr, "Error: vips init failed\n");
+        logDiagnostic("error", "worker", "vips_init_failed");
         return 1;
     }
     if (args.vipsConcurrency > 0) {
@@ -255,9 +351,12 @@ int main(int argc, char* argv[]) {
         totalPageMs += result.pageMs;
         totalOptimizedPageMs += pageMs;
         optimizedPageCount++;
-        fprintf(stderr, "[worker] page %d: %.1fms (decode=%.1f thumb=%.1f page=%.1f) %s%s\n",
-            pageIndex, pageMs, result.decodeMs, result.thumbMs, result.pageMs,
-            result.bypassed ? "BYPASS " : "", entryName.c_str());
+        if (pageMs >= kSlowPageLogThresholdMs || result.bypassed) {
+            logDiagnostic("info", "worker", "slow_page",
+                "page=%d totalMs=%.1f decodeMs=%.1f thumbMs=%.1f pageMs=%.1f bypassed=%d entry=%s",
+                pageIndex, pageMs, result.decodeMs, result.thumbMs, result.pageMs,
+                result.bypassed ? 1 : 0, json(entryName).dump().c_str());
+        }
         return true;
     };
 
@@ -311,13 +410,17 @@ int main(int argc, char* argv[]) {
         totalPageMs += result.pageMs;
         totalOptimizedPageMs += pageMs;
         optimizedPageCount++;
-        fprintf(stderr, "[worker] preview page 0: %.1fms (decode=%.1f thumb=%.1f page=%.1f) %s%s\n",
-            pageMs, result.decodeMs, result.thumbMs, result.pageMs,
-            result.bypassed ? "BYPASS " : "", entryName.c_str());
+        if (pageMs >= kSlowPageLogThresholdMs || result.bypassed) {
+            logDiagnostic("info", "worker", "slow_preview_page",
+                "page=0 totalMs=%.1f decodeMs=%.1f thumbMs=%.1f pageMs=%.1f bypassed=%d entry=%s",
+                pageMs, result.decodeMs, result.thumbMs, result.pageMs,
+                result.bypassed ? 1 : 0, json(entryName).dump().c_str());
+        }
         return true;
     };
 
     auto totalStart = std::chrono::steady_clock::now();
+    logWorkerMemory("startup");
 
     // === Phase 0: Fast preview for page 0 ===
     bool previewReady = false;
@@ -333,13 +436,13 @@ int main(int argc, char* argv[]) {
         try {
             previewReady = previewBackend->extractPreview(args.input, args.output + "/raw", 0, previewEntryName, previewRawPath);
         } catch (const std::exception& e) {
-            fprintf(stderr, "[worker] Preview extraction failed: %s\n", e.what());
+            logDiagnostic("error", "worker", "preview_extraction_failed", "message=%s", json(std::string(e.what())).dump().c_str());
             previewReady = false;
         }
         auto previewEnd = std::chrono::steady_clock::now();
         double previewMs = std::chrono::duration<double, std::milli>(previewEnd - previewStart).count();
         if (previewReady) {
-            fprintf(stderr, "[worker] Preview ready in %.1fms: %s\n", previewMs, previewEntryName.c_str());
+            logDiagnostic("info", "worker", "preview_ready", "previewMs=%.1f entry=%s", previewMs, json(previewEntryName).dump().c_str());
             previewProcessed = processPreviewFromRaw(previewEntryName, previewRawPath);
             previewBackend->close();
         }
@@ -351,22 +454,24 @@ int main(int argc, char* argv[]) {
     else if (args.backend == "zip") backend = createZipBackend();
     int totalEntries;
 
-    fprintf(stderr, "[worker] Phase 1: Extracting archive to raw/...\n");
+    logDiagnostic("info", "worker", "phase_start", "phase=%s", json("extract_raw").dump().c_str());
     auto extractStart = std::chrono::steady_clock::now();
 
     try {
         totalEntries = backend->open(args.input, args.output + "/raw",
                                       extractionProgress, nullptr);
     } catch (const std::exception& e) {
-        fprintf(stderr, "Error: %s\n", e.what());
+        logDiagnostic("error", "worker", "archive_open_failed", "message=%s", json(std::string(e.what())).dump().c_str());
         vips_shutdown();
         return 1;
     }
 
     auto extractEnd = std::chrono::steady_clock::now();
     double extractMs = std::chrono::duration<double, std::milli>(extractEnd - extractStart).count();
-    fprintf(stderr, "[worker] Phase 1 complete: %d entries in %.1fms (%.1fms/entry)\n",
-        totalEntries, extractMs, totalEntries > 0 ? extractMs / totalEntries : 0);
+    logDiagnostic("info", "worker", "phase_complete",
+        "phase=%s totalEntries=%d totalMs=%.1f perEntryMs=%.1f",
+        json("extract_raw").dump().c_str(), totalEntries, extractMs, totalEntries > 0 ? extractMs / totalEntries : 0);
+    logWorkerMemory("after-extraction");
 
     int processedCount = previewProcessed ? 1 : 0;
 
@@ -387,7 +492,7 @@ int main(int argc, char* argv[]) {
     }
 
     // === Phase 2: Process pages on demand ===
-    fprintf(stderr, "[worker] Phase 2: Ready for focus commands\n");
+    logDiagnostic("info", "worker", "phase_start", "phase=%s", json("focus_processing").dump().c_str());
 
     while (!cancelled) {
         // Check stdin
@@ -397,7 +502,6 @@ int main(int argc, char* argv[]) {
             if (type == "focus") {
                 int page = cmd.value("page", 0);
                 queue.focus(page, args.windowBefore, args.windowAfter);
-                fprintf(stderr, "[worker] Focus -> page %d\n", page);
             } else if (type == "quit") {
                 cancelled = 1;
                 break;
@@ -422,6 +526,11 @@ int main(int argc, char* argv[]) {
         if (needsPage) {
             if (processPageAtIndex(*backend, pageIndex)) {
                 processedCount++;
+                if (processedCount % 25 == 0) {
+                    char label[64];
+                    std::snprintf(label, sizeof(label), "processed=%d", processedCount);
+                    logWorkerMemoryWithQueue(label, queue, processedCount);
+                }
             }
             queue.markDone(pageIndex);
         } else if (pageIndex != 0 || processedCount == 0) {
@@ -462,11 +571,12 @@ int main(int argc, char* argv[]) {
         emitDone(processedCount, totalMs);
     }
 
-    fprintf(stderr, "[worker] %s: %d pages processed in %.1fms (extraction: %.1fms)\n",
-        cancelled ? "Cancelled" : "Complete", processedCount, totalMs, extractMs);
-    fprintf(stderr,
-        "[worker] timing summary: optimized=%d pages in %.1fms (avg=%.1fms/page), "
-        "decode=%.1fms, thumb=%.1fms, page=%.1fms, bgThumb=%d in %.1fms (avg=%.1fms/thumb)\n",
+    logDiagnostic("info", "worker", cancelled ? "cancelled" : "complete",
+        "processedPages=%d totalMs=%.1f extractionMs=%.1f",
+        processedCount, totalMs, extractMs);
+    logDiagnostic("info", "worker", "timing_summary",
+        "optimizedPages=%d optimizedTotalMs=%.1f optimizedAvgMs=%.1f "
+        "decodeMs=%.1f thumbMs=%.1f pageMs=%.1f bgThumbCount=%d bgThumbTotalMs=%.1f bgThumbAvgMs=%.1f",
         optimizedPageCount,
         totalOptimizedPageMs,
         optimizedPageCount > 0 ? totalOptimizedPageMs / optimizedPageCount : 0.0,
@@ -476,6 +586,7 @@ int main(int argc, char* argv[]) {
         backgroundThumbCount,
         totalBackgroundThumbMs,
         backgroundThumbCount > 0 ? totalBackgroundThumbMs / backgroundThumbCount : 0.0);
+    logWorkerMemoryWithQueue(cancelled ? "final-cancelled" : "final-complete", queue, processedCount);
 
     backend->close();
     vips_shutdown();

@@ -1,7 +1,37 @@
 #include "work_queue.h"
 #include <algorithm>
+#include <chrono>
+#include <ctime>
 #include <filesystem>
 #include <cstdio>
+
+static std::string isoTimestampUtc() {
+    using namespace std::chrono;
+    const auto now = system_clock::now();
+    const auto seconds = time_point_cast<std::chrono::seconds>(now);
+    const auto millis = duration_cast<milliseconds>(now - seconds).count();
+    const std::time_t timeValue = system_clock::to_time_t(now);
+    std::tm tmUtc{};
+#ifdef _WIN32
+    gmtime_s(&tmUtc, &timeValue);
+#else
+    gmtime_r(&timeValue, &tmUtc);
+#endif
+
+    char buffer[80];
+    std::snprintf(
+        buffer,
+        sizeof(buffer),
+        "%04d-%02d-%02dT%02d:%02d:%02d.%03lldZ",
+        tmUtc.tm_year + 1900,
+        tmUtc.tm_mon + 1,
+        tmUtc.tm_mday,
+        tmUtc.tm_hour,
+        tmUtc.tm_min,
+        tmUtc.tm_sec,
+        static_cast<long long>(millis));
+    return std::string(buffer);
+}
 
 namespace fs = std::filesystem;
 
@@ -24,22 +54,18 @@ void WorkQueue::focus(int centerPage, int windowBefore, int windowAfter) {
     int end = std::min(totalPages - 1, centerPage + windowAfter);
 
     if (centerPage == lastFocusPage && start == lastFocusStart && end == lastFocusEnd) {
-        fprintf(stderr, "[queue] focus(%d) ignored (same window %d-%d)\n", centerPage, start, end);
         return;
     }
 
-    fprintf(stderr, "[queue] focus(%d) window %d-%d, qBefore: %d, donePages: %d, doneThumb: %d\n",
-        centerPage, start, end, (int)priorityQueue.size(),
-        (int)donePages.size(), (int)doneThumbOnly.size());
-
     if (lastFocusPage >= 0 && std::abs(centerPage - lastFocusPage) > kFarJumpThreshold) {
         priorityQueue.clear();
-        fprintf(stderr, "[queue] pruned stale priority queue on far jump %d -> %d\n", lastFocusPage, centerPage);
+        std::fprintf(
+            stderr,
+            "ts=%s level=info source=queue event=pruned_stale_priority oldPage=%d newPage=%d\n",
+            isoTimestampUtc().c_str(),
+            lastFocusPage,
+            centerPage);
     }
-
-    const bool hadPreviousWindow = lastFocusStart >= 0 && lastFocusEnd >= 0;
-    const bool overlapsPreviousWindow =
-        hadPreviousWindow && !(end < lastFocusStart || start > lastFocusEnd);
 
     // Build the active priority window as center first, then nearest neighbors.
     // For nearby navigation we replace the active window instead of accumulating
@@ -64,20 +90,10 @@ void WorkQueue::focus(int centerPage, int windowBefore, int windowAfter) {
         priorityQueue.push_back(page);
     }
 
-    if (overlapsPreviousWindow && centerPage != lastFocusPage) {
-        fprintf(stderr,
-            "[queue] merged nearby focus into active window %d-%d -> %d-%d\n",
-            lastFocusStart, lastFocusEnd, start, end);
-    }
-
     trimPriorityQueue();
     lastFocusPage = centerPage;
     lastFocusStart = start;
     lastFocusEnd = end;
-
-    fprintf(stderr, "[queue] after focus(%d): qSize=%d, front=%d\n",
-        centerPage, (int)priorityQueue.size(),
-        priorityQueue.empty() ? -1 : priorityQueue.front());
 }
 
 int WorkQueue::next(bool& outNeedsPage) {
@@ -87,12 +103,10 @@ int WorkQueue::next(bool& outNeedsPage) {
         priorityQueue.pop_front();
 
         if (isPageDone(page)) {
-            fprintf(stderr, "[queue] skip priority %d (already done)\n", page);
             continue;
         }
 
         outNeedsPage = true;
-        fprintf(stderr, "[queue] priority -> page %d (remaining: %d)\n", page, (int)priorityQueue.size());
         return page;
     }
 

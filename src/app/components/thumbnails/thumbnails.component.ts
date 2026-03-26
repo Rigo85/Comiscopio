@@ -1,4 +1,4 @@
-import { Component, ElementRef, ViewChild, input, output, signal, OnChanges, OnDestroy, SimpleChanges } from '@angular/core';
+import { Component, ElementRef, ViewChild, input, output, signal, computed, OnChanges, OnDestroy, SimpleChanges } from '@angular/core';
 import { ThumbnailCacheService } from '../../services/thumbnail-cache.service';
 
 /**
@@ -20,21 +20,31 @@ import { ThumbnailCacheService } from '../../services/thumbnail-cache.service';
           </button>
         </div>
         <div class="thumbnails-list" #list (scroll)="onScroll()">
-          @for (i of pageIndices(); track i) {
-            <button
-              class="thumbnail-item"
-              [attr.data-page]="i"
-              [class.active]="i === currentPage()"
-              (click)="pageSelect.emit(i)"
-            >
-              @if (thumbnailUrls().get(i); as url) {
-                <img [src]="url" [alt]="'Página ' + (i + 1)" loading="lazy" />
-              } @else {
-                <div class="thumbnail-placeholder">{{ i + 1 }}</div>
+          <div class="thumbnails-spacer" [style.height.px]="totalContentHeight()">
+            <div class="thumbnails-window" [style.transform]="'translateY(' + offsetTop() + 'px)'">
+              @for (slot of visibleSlots(); track slot.slot) {
+                @if (!slot.isEmpty) {
+                  <button
+                    class="thumbnail-item"
+                    [attr.data-page]="slot.pageIndex"
+                    [class.active]="slot.pageIndex === currentPage()"
+                    (click)="pageSelect.emit(slot.pageIndex)"
+                  >
+                    <div class="thumbnail-media">
+                      @if (thumbnailUrls().get(slot.pageIndex); as url) {
+                        <img [src]="url" [alt]="'Página ' + (slot.pageIndex + 1)" loading="lazy" />
+                      } @else {
+                        <div class="thumbnail-placeholder">{{ slot.pageIndex + 1 }}</div>
+                      }
+                    </div>
+                    <span class="thumbnail-label">{{ slot.pageIndex + 1 }}</span>
+                  </button>
+                } @else {
+                  <div class="thumbnail-item thumbnail-item-empty" aria-hidden="true"></div>
+                }
               }
-              <span class="thumbnail-label">{{ i + 1 }}</span>
-            </button>
-          }
+            </div>
+          </div>
         </div>
       </div>
     }
@@ -81,6 +91,19 @@ import { ThumbnailCacheService } from '../../services/thumbnail-cache.service';
       flex: 1;
       overflow-y: auto;
       padding: 8px;
+      position: relative;
+    }
+
+    .thumbnails-spacer {
+      position: relative;
+      width: 100%;
+    }
+
+    .thumbnails-window {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
       display: flex;
       flex-direction: column;
       gap: 6px;
@@ -92,10 +115,13 @@ import { ThumbnailCacheService } from '../../services/thumbnail-cache.service';
       border-radius: 4px;
       padding: 2px;
       cursor: pointer;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
+      display: grid;
+      grid-template-rows: 1fr auto;
+      align-items: stretch;
       transition: border-color 0.1s;
+      height: 103px;
+      box-sizing: border-box;
+      overflow: hidden;
 
       &:hover {
         border-color: #555;
@@ -107,15 +133,27 @@ import { ThumbnailCacheService } from '../../services/thumbnail-cache.service';
 
       img {
         width: 100%;
-        height: auto;
+        height: 100%;
         display: block;
         border-radius: 2px;
+        object-fit: contain;
       }
+    }
+
+    .thumbnail-item-empty {
+      visibility: hidden;
+      pointer-events: none;
+    }
+
+    .thumbnail-media {
+      min-height: 0;
+      width: 100%;
+      overflow: hidden;
     }
 
     .thumbnail-placeholder {
       width: 100%;
-      height: 80px;
+      height: 100%;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -133,6 +171,10 @@ import { ThumbnailCacheService } from '../../services/thumbnail-cache.service';
   `,
 })
 export class ThumbnailsComponent implements OnChanges, OnDestroy {
+  private static readonly ITEM_HEIGHT = 109;
+  private static readonly OVERSCAN = 8;
+  private static readonly TARGET_ITEMS_ABOVE_CURRENT = 1;
+
   visible = input(false);
   currentPage = input(0);
   totalPages = input(0);
@@ -141,8 +183,34 @@ export class ThumbnailsComponent implements OnChanges, OnDestroy {
   visibleChange = output<boolean>();
   pageSelect = output<number>();
 
-  pageIndices = signal<number[]>([]);
   thumbnailUrls = signal<Map<number, string>>(new Map());
+  scrollTop = signal(0);
+  viewportHeight = signal(0);
+  startIndex = computed(() => {
+    const rawStart = Math.floor(this.scrollTop() / ThumbnailsComponent.ITEM_HEIGHT) - ThumbnailsComponent.OVERSCAN;
+    return Math.max(0, rawStart);
+  });
+  endIndex = computed(() => {
+    return Math.min(this.totalPages(), this.startIndex() + this.visibleSlotCount());
+  });
+  visibleSlotCount = computed(() => {
+    const visibleCount = Math.ceil(this.viewportHeight() / ThumbnailsComponent.ITEM_HEIGHT) + (ThumbnailsComponent.OVERSCAN * 2);
+    return Math.max(visibleCount, 1);
+  });
+  visibleSlots = computed(() => {
+    const start = this.startIndex();
+    const total = this.totalPages();
+    return Array.from({ length: this.visibleSlotCount() }, (_, slot) => {
+      const pageIndex = start + slot;
+      return {
+        slot,
+        pageIndex: pageIndex < total ? pageIndex : -1,
+        isEmpty: pageIndex >= total,
+      };
+    });
+  });
+  offsetTop = computed(() => this.startIndex() * ThumbnailsComponent.ITEM_HEIGHT);
+  totalContentHeight = computed(() => this.totalPages() * ThumbnailsComponent.ITEM_HEIGHT);
   @ViewChild('list') listRef?: ElementRef<HTMLElement>;
   private unsubscribeThumbnail?: () => void;
 
@@ -154,12 +222,13 @@ export class ThumbnailsComponent implements OnChanges, OnDestroy {
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['totalPages'] || changes['fileHash']) {
-      this.pageIndices.set(Array.from({ length: this.totalPages() }, (_, i) => i));
       this.thumbnailUrls.set(new Map());
+      this.scrollTop.set(0);
       if (!this.fileHash()) {
         this.thumbnailCache.clear();
       } else if (this.visible()) {
         queueMicrotask(() => {
+          this.updateViewportMetrics();
           this.scrollToCurrentPage();
           this.loadVisibleThumbnails();
         });
@@ -169,6 +238,7 @@ export class ThumbnailsComponent implements OnChanges, OnDestroy {
     if (changes['visible'] || changes['currentPage']) {
       if (this.visible()) {
         queueMicrotask(() => {
+          this.updateViewportMetrics();
           this.scrollToCurrentPage();
           this.loadVisibleThumbnails();
         });
@@ -177,17 +247,18 @@ export class ThumbnailsComponent implements OnChanges, OnDestroy {
   }
 
   onScroll(): void {
+    this.updateViewportMetrics();
     void this.loadVisibleThumbnails();
   }
 
   private loadVisibleThumbnails(): void {
-    const total = this.totalPages();
-    if (!this.visible() || total === 0) return;
+    if (!this.visible() || this.totalPages() === 0) return;
 
-    // Populate URLs for thumbs that are already ready
-    for (let i = 0; i < total; i++) {
-      if (this.thumbnailCache.isReady(i) && !this.thumbnailUrls().has(i)) {
-        this.setThumbnailUrl(i, this.thumbnailCache.getThumbUrl(i));
+    for (const slot of this.visibleSlots()) {
+      const pageIndex = slot.pageIndex;
+      if (slot.isEmpty) continue;
+      if (this.thumbnailCache.isReady(pageIndex) && !this.thumbnailUrls().has(pageIndex)) {
+        this.setThumbnailUrl(pageIndex, this.thumbnailCache.getThumbUrl(pageIndex));
       }
     }
   }
@@ -204,8 +275,30 @@ export class ThumbnailsComponent implements OnChanges, OnDestroy {
     const list = this.listRef?.nativeElement;
     if (!list) return;
 
-    const current = list.querySelector(`[data-page="${this.currentPage()}"]`) as HTMLElement | null;
-    current?.scrollIntoView({ block: 'nearest' });
+    const targetTop = this.currentPage() * ThumbnailsComponent.ITEM_HEIGHT;
+    const targetBottom = targetTop + ThumbnailsComponent.ITEM_HEIGHT;
+    const viewTop = list.scrollTop;
+    const viewBottom = viewTop + list.clientHeight;
+    const desiredScrollTop = Math.max(
+      0,
+      Math.min(
+        targetTop - (ThumbnailsComponent.TARGET_ITEMS_ABOVE_CURRENT * ThumbnailsComponent.ITEM_HEIGHT),
+        Math.max(0, list.scrollHeight - list.clientHeight),
+      ),
+    );
+
+    if (targetTop < viewTop || targetBottom > viewBottom) {
+      list.scrollTop = desiredScrollTop;
+    }
+
+    this.updateViewportMetrics();
+  }
+
+  private updateViewportMetrics(): void {
+    const list = this.listRef?.nativeElement;
+    if (!list) return;
+    this.scrollTop.set(list.scrollTop);
+    this.viewportHeight.set(list.clientHeight);
   }
 
   ngOnDestroy(): void {

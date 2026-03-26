@@ -35,6 +35,15 @@ public:
     /// Get current background progress
     int backgroundProgress() const { return bgNext; }
 
+    /// Current queue size for diagnostics
+    int queuedItems() const { return static_cast<int>(priorityQueue.size()); }
+
+    /// Completed optimized pages count
+    int donePageCount() const { return static_cast<int>(donePages.size()); }
+
+    /// Completed thumb-only pages count
+    int doneThumbOnlyCount() const { return static_cast<int>(doneThumbOnly.size()); }
+
 private:
     static constexpr int kFarJumpThreshold = 12;
     static constexpr int kMaxPriorityItems = 24;

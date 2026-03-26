@@ -1,6 +1,8 @@
 import { app, BrowserWindow, ipcMain, dialog, protocol } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
+import * as util from 'util';
 import { WindowManager } from './window-manager';
 import { NativeWorkerBridge } from './native-worker-bridge';
 import { Database } from './db/database';
@@ -12,6 +14,195 @@ let workerBridge: NativeWorkerBridge;
 let database: Database;
 
 const isDev = !app.isPackaged;
+const LOG_DIR = path.join(os.homedir(), '.comiscopio', 'logs');
+const LOG_FILE_NAME = 'performance.log';
+const LOG_FILE_PATH = path.join(LOG_DIR, LOG_FILE_NAME);
+const LOG_MAX_BYTES = 10 * 1024 * 1024;
+const LOG_MAX_FILES = 5;
+
+let installedFileLogger = false;
+let currentLogSize = 0;
+
+function rotateLogFiles(): void {
+  for (let index = LOG_MAX_FILES - 1; index >= 1; index--) {
+    const source = `${LOG_FILE_PATH}.${index}`;
+    const target = `${LOG_FILE_PATH}.${index + 1}`;
+    if (fs.existsSync(target)) {
+      fs.rmSync(target, { force: true });
+    }
+    if (fs.existsSync(source)) {
+      fs.renameSync(source, target);
+    }
+  }
+
+  if (fs.existsSync(LOG_FILE_PATH)) {
+    const rotated = `${LOG_FILE_PATH}.1`;
+    if (fs.existsSync(rotated)) {
+      fs.rmSync(rotated, { force: true });
+    }
+    fs.renameSync(LOG_FILE_PATH, rotated);
+  }
+
+  currentLogSize = 0;
+}
+
+function appendLogLine(line: string): void {
+  const output = `${line}\n`;
+  const bytes = Buffer.byteLength(output);
+
+  fs.mkdirSync(LOG_DIR, { recursive: true });
+
+  if (currentLogSize + bytes > LOG_MAX_BYTES) {
+    rotateLogFiles();
+  }
+
+  fs.appendFileSync(LOG_FILE_PATH, output, 'utf8');
+  currentLogSize += bytes;
+}
+
+function installFileLogger(): void {
+  if (installedFileLogger) return;
+  installedFileLogger = true;
+
+  fs.mkdirSync(LOG_DIR, { recursive: true });
+  app.setAppLogsPath(LOG_DIR);
+  currentLogSize = fs.existsSync(LOG_FILE_PATH) ? fs.statSync(LOG_FILE_PATH).size : 0;
+
+  const originalLog = console.log.bind(console);
+  const originalWarn = console.warn.bind(console);
+  const originalError = console.error.bind(console);
+
+  console.log = (...args: unknown[]) => {
+    const line = util.format(...args);
+    originalLog(...args);
+    appendLogLine(line);
+  };
+
+  console.warn = (...args: unknown[]) => {
+    const line = util.format(...args);
+    originalWarn(...args);
+    appendLogLine(line);
+  };
+
+  console.error = (...args: unknown[]) => {
+    const line = util.format(...args);
+    originalError(...args);
+    appendLogLine(line);
+  };
+
+  logDiagnostic('info', 'logger', 'initialized', {
+    logDir: LOG_DIR,
+    file: LOG_FILE_NAME,
+    maxBytes: LOG_MAX_BYTES,
+    maxFiles: LOG_MAX_FILES,
+  });
+}
+
+type LogValue = string | number | boolean | null | undefined;
+
+function logTimestamp(): string {
+  return new Date().toISOString();
+}
+
+function formatLogValue(value: LogValue): string {
+  if (value === undefined) return 'undefined';
+  if (value === null) return 'null';
+  if (typeof value === 'string') return JSON.stringify(value);
+  return String(value);
+}
+
+function logDiagnostic(
+  level: 'info' | 'warn' | 'error',
+  source: string,
+  event: string,
+  fields: Record<string, LogValue> = {},
+): void {
+  const parts = [`ts=${logTimestamp()}`, `level=${level}`, `source=${source}`, `event=${event}`];
+  for (const [key, value] of Object.entries(fields)) {
+    parts.push(`${key}=${formatLogValue(value)}`);
+  }
+  console.log(parts.join(' '));
+}
+
+function formatMbFromBytes(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+}
+
+function formatMbFromKb(kb: number): string {
+  return `${(kb / 1024).toFixed(1)}MB`;
+}
+
+function summarizeProcessMetrics(
+  metrics: Array<{
+    pid?: number;
+    type?: string;
+    memory?: { workingSetSize?: number; privateBytes?: number };
+  }>
+): string {
+  const grouped = new Map<string, { count: number; workingSetKb: number; privateBytesKb: number }>();
+
+  for (const metric of metrics) {
+    const type = metric.type || 'unknown';
+    const current = grouped.get(type) || { count: 0, workingSetKb: 0, privateBytesKb: 0 };
+    current.count += 1;
+    current.workingSetKb += metric.memory?.workingSetSize || 0;
+    current.privateBytesKb += metric.memory?.privateBytes || 0;
+    grouped.set(type, current);
+  }
+
+  return Array.from(grouped.entries())
+    .sort((a, b) => b[1].workingSetKb - a[1].workingSetKb)
+    .map(([type, info]) =>
+      `${type}:count=${info.count},ws=${formatMbFromKb(info.workingSetKb)},private=${formatMbFromKb(info.privateBytesKb)}`
+    )
+    .join(' | ');
+}
+
+function listProcessMetrics(
+  metrics: Array<{
+    pid?: number;
+    type?: string;
+    memory?: { workingSetSize?: number; privateBytes?: number };
+  }>
+): string {
+  return metrics
+    .slice()
+    .sort((a, b) => (b.memory?.workingSetSize || 0) - (a.memory?.workingSetSize || 0))
+    .map((metric) =>
+      `pid=${metric.pid || 0},type=${metric.type || 'unknown'},` +
+      `ws=${formatMbFromKb(metric.memory?.workingSetSize || 0)},` +
+      `private=${formatMbFromKb(metric.memory?.privateBytes || 0)}`
+    )
+    .join(' | ');
+}
+
+function logElectronMemory(event: string, extraFields: Record<string, LogValue> = {}, win?: BrowserWindow): void {
+  if (!isDev) return;
+
+  const mainMem = process.memoryUsage();
+  const metrics = app.getAppMetrics() as Array<{
+    pid?: number;
+    type?: string;
+    memory?: { workingSetSize?: number; privateBytes?: number };
+  }>;
+
+  const rendererPid = win?.webContents.getOSProcessId();
+  const rendererMetric = rendererPid ? metrics.find((metric) => metric.pid === rendererPid) : undefined;
+  const totalWorkingSetKb = metrics.reduce((sum, metric) => sum + (metric.memory?.workingSetSize || 0), 0);
+  const breakdown = summarizeProcessMetrics(metrics);
+  const processes = listProcessMetrics(metrics);
+
+  logDiagnostic('info', 'electron', event, {
+    ...extraFields,
+    mainRss: formatMbFromBytes(mainMem.rss),
+    mainHeapUsed: formatMbFromBytes(mainMem.heapUsed),
+    appWorkingSet: formatMbFromKb(totalWorkingSetKb),
+    rendererWorkingSet: formatMbFromKb(rendererMetric?.memory?.workingSetSize || 0),
+    rendererPid: rendererPid || 0,
+    breakdown,
+    processes,
+  });
+}
 
 // Register custom protocol schemes before app is ready
 protocol.registerSchemesAsPrivileged([
@@ -65,22 +256,16 @@ function registerProtocolHandlers(): void {
 
       const thumbPath = workerBridge.resolveThumbPath(fileHash, pageIndex);
       if (!thumbPath) {
-        if (isDev && pageIndex === 0) {
-          console.log(`[thumb-protocol] miss page=0 url=${request.url}`);
-        }
         return new Response('Not found', { status: 404 });
       }
 
       const bytes = await fs.promises.readFile(thumbPath);
-      if (isDev && pageIndex === 0) {
-        console.log(`[thumb-protocol] hit page=0 path=${thumbPath} bytes=${bytes.length}`);
-      }
       return new Response(bytes, {
         headers: { 'content-type': 'image/jpeg', 'cache-control': 'no-cache' },
       });
     } catch {
       if (isDev) {
-        console.log(`[thumb-protocol] error url=${request.url}`);
+        logDiagnostic('error', 'thumb_protocol', 'request_error', { url: request.url });
       }
       return new Response('Error', { status: 500 });
     }
@@ -100,9 +285,6 @@ function registerProtocolHandlers(): void {
 
       const pagePath = workerBridge.resolvePagePath(fileHash, pageIndex, variant);
       if (!pagePath) {
-        if (isDev && pageIndex === 0) {
-          console.log(`[page-protocol] miss page=0 variant=${variant} url=${request.url}`);
-        }
         return new Response('Not found', { status: 404 });
       }
 
@@ -113,9 +295,6 @@ function registerProtocolHandlers(): void {
       };
 
       const bytes = await fs.promises.readFile(pagePath);
-      if (isDev && pageIndex === 0) {
-        console.log(`[page-protocol] hit page=0 variant=${variant} path=${pagePath} bytes=${bytes.length}`);
-      }
       return new Response(bytes, {
         headers: {
           'content-type': mimeTypes[ext] || 'application/octet-stream',
@@ -124,7 +303,7 @@ function registerProtocolHandlers(): void {
       });
     } catch {
       if (isDev) {
-        console.log(`[page-protocol] error url=${request.url}`);
+        logDiagnostic('error', 'page_protocol', 'request_error', { url: request.url });
       }
       return new Response('Error', { status: 500 });
     }
@@ -158,6 +337,7 @@ function setupIpcHandlers(): void {
   ipcMain.handle(IpcChannels.WORKER_START, async (event, filePath: string) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win) throw new Error('No window');
+    const sessionId = require('crypto').randomUUID();
 
     // Compute file hash for session key
     const stat = fs.statSync(filePath);
@@ -166,10 +346,20 @@ function setupIpcHandlers(): void {
     const fileHash = crypto.createHash('sha256').update(data).digest('hex').substring(0, 16);
     const fileName = path.basename(filePath);
 
+    logDiagnostic('info', 'session', 'session_start', {
+      sessionId,
+      fileHash,
+      filePath,
+      fileName,
+      fileSize: stat.size,
+      mtimeMs: Math.round(stat.mtimeMs),
+      alreadyOpen: !!workerBridge.getSession(fileHash)?.ready,
+    });
+
     // Check if already opened
     const existing = workerBridge.getSession(fileHash);
     if (existing && existing.ready) {
-      return { fileHash, fileName, filePath, totalPages: existing.totalPages, alreadyOpen: true };
+      return { fileHash, sessionId, fileName, filePath, totalPages: existing.totalPages, alreadyOpen: true };
     }
 
     // Start native worker on the next tick so the renderer has time to
@@ -177,19 +367,50 @@ function setupIpcHandlers(): void {
     setImmediate(() => {
       workerBridge.startSession(fileHash, filePath, (evt) => {
         if (win.isDestroyed()) return;
-        win.webContents.send(IpcChannels.WORKER_EVENT, { fileHash, ...evt });
+        if (evt.type === 'archive') {
+          logElectronMemory('archive', { fileHash, sessionId }, win);
+        } else if (evt.type === 'done') {
+          logElectronMemory('done', { fileHash, sessionId }, win);
+        }
+        win.webContents.send(IpcChannels.WORKER_EVENT, { fileHash, sessionId, ...evt });
       });
     });
 
-    return { fileHash, fileName, filePath, totalPages: 0, alreadyOpen: false };
+    return { fileHash, sessionId, fileName, filePath, totalPages: 0, alreadyOpen: false };
   });
 
   ipcMain.on(IpcChannels.WORKER_FOCUS, (_event, fileHash: string, page: number) => {
     workerBridge.focus(fileHash, page);
   });
 
-  ipcMain.on(IpcChannels.WORKER_CLOSE, (_event, fileHash: string) => {
+  ipcMain.on(
+    IpcChannels.WORKER_CLOSE,
+    (_event, fileHash: string, meta?: { sessionId?: string; reason?: string }) => {
     workerBridge.closeSession(fileHash);
+    const win = BrowserWindow.getAllWindows()[0];
+    if (win && !win.isDestroyed()) {
+      logElectronMemory(
+        'worker_close',
+        { fileHash, sessionId: meta?.sessionId, reason: meta?.reason ?? 'unspecified' },
+        win,
+      );
+    }
+    },
+  );
+
+  ipcMain.on(IpcChannels.REPORT_RENDERER_STATS, (event, payload: Record<string, unknown>) => {
+    if (!isDev) return;
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const label = typeof payload?.['label'] === 'string' ? payload['label'] : 'renderer';
+    const details = Object.fromEntries(Object.entries(payload || {}).filter(([key]) => key !== 'label')) as Record<
+      string,
+      LogValue
+    >;
+    if (win && !win.isDestroyed()) {
+      logElectronMemory(label, details, win);
+    } else {
+      logElectronMemory(label, details);
+    }
   });
 
   ipcMain.handle(IpcChannels.GET_WORKER_MANIFEST, async (_event, fileHash: string) => {
@@ -312,6 +533,7 @@ function getFileFromArgs(argv: string[]): string | null {
 }
 
 app.whenReady().then(async () => {
+  installFileLogger();
   await initialize();
   registerProtocolHandlers();
   setupIpcHandlers();

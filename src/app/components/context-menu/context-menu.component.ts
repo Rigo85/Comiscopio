@@ -1,4 +1,4 @@
-import { Component, input, output, signal, HostListener } from '@angular/core';
+import { Component, input, output, signal, HostListener, ElementRef, viewChild } from '@angular/core';
 import type { ReadingMode, FitMode, PageLayout } from '../../../../shared/models';
 
 export interface ContextMenuAction {
@@ -42,6 +42,7 @@ type MenuEntry = MenuItem | MenuSeparator;
     @if (visible()) {
       <div class="menu-backdrop" (click)="close()" (contextmenu)="$event.preventDefault(); close()">
         <div
+          #menuRoot
           class="menu"
           [style.left.px]="x()"
           [style.top.px]="y()"
@@ -131,6 +132,7 @@ export class ContextMenuComponent {
   visible = signal(false);
   x = signal(0);
   y = signal(0);
+  private readonly menuRoot = viewChild<ElementRef<HTMLElement>>('menuRoot');
 
   menuItems = signal<MenuEntry[]>([]);
 
@@ -141,17 +143,20 @@ export class ContextMenuComponent {
     this.buildMenu();
     this.visible.set(true);
 
-    // Adjust position if menu goes off screen
+    // Clamp menu inside the viewport after it renders.
     requestAnimationFrame(() => {
-      const menu = document.querySelector('.menu') as HTMLElement;
+      const menu = this.menuRoot()?.nativeElement;
       if (!menu) return;
+
       const rect = menu.getBoundingClientRect();
-      if (rect.right > window.innerWidth) {
-        this.x.set(event.clientX - rect.width);
-      }
-      if (rect.bottom > window.innerHeight) {
-        this.y.set(event.clientY - rect.height);
-      }
+      const margin = 8;
+      const maxX = Math.max(margin, window.innerWidth - rect.width - margin);
+      const maxY = Math.max(margin, window.innerHeight - rect.height - margin);
+      const nextX = Math.min(Math.max(event.clientX, margin), maxX);
+      const nextY = Math.min(Math.max(event.clientY, margin), maxY);
+
+      this.x.set(nextX);
+      this.y.set(nextY);
     });
   }
 

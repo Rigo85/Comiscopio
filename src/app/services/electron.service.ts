@@ -32,6 +32,7 @@ export class ElectronService {
 
   async workerStart(filePath: string): Promise<{
     fileHash: string;
+    sessionId: string;
     fileName: string;
     filePath: string;
     totalPages: number;
@@ -48,8 +49,8 @@ export class ElectronService {
     this.api.send(IpcChannels.WORKER_FOCUS, fileHash, page);
   }
 
-  workerClose(fileHash: string): void {
-    this.api.send(IpcChannels.WORKER_CLOSE, fileHash);
+  workerClose(fileHash: string, meta?: { sessionId?: string; reason?: string }): void {
+    this.api.send(IpcChannels.WORKER_CLOSE, fileHash, meta);
   }
 
   onWorkerEvent(listener: (event: any) => void): () => void {
@@ -92,6 +93,10 @@ export class ElectronService {
 
   async saveSettings(settings: Partial<AppSettings>): Promise<void> {
     await this.api.invoke(IpcChannels.SAVE_SETTINGS, settings);
+  }
+
+  reportRendererStats(payload: Record<string, unknown>): void {
+    this.api.send(IpcChannels.REPORT_RENDERER_STATS, payload);
   }
 
   // --- Window controls ---

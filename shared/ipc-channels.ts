@@ -42,6 +42,7 @@ export const IpcChannels = {
   // App
   GET_RECENT_FILES: 'get-recent-files',
   CLEANUP_TEMP: 'cleanup-temp',
+  REPORT_RENDERER_STATS: 'report-renderer-stats',
 
   // Settings
   GET_SETTINGS: 'get-settings',

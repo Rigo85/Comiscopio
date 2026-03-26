@@ -181,7 +181,7 @@ export class NativeWorkerBridge {
     // Log stderr (worker diagnostics)
     const stderrRl = readline.createInterface({ input: proc.stderr! });
     stderrRl.on('line', (line) => {
-      console.log(`[native-worker] ${line}`);
+      console.log(line);
     });
 
     proc.on('exit', (code) => {
