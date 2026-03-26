@@ -84,13 +84,11 @@ interface FileState {
         class="viewer-container viewer-reading"
         [class.vertical-mode]="readerState.isVertical()"
         [class.zoomed]="zoomPan.isZoomed()"
-        [class.zen-mode]="zenMode()"
         (mousedown)="onPanStart($event)"
         (mousemove)="onPanMove($event)"
         (mouseup)="onPanEnd()"
         (mouseleave)="onPanEnd()"
         (contextmenu)="onContextMenu($event)"
-        (dblclick)="onDoubleClick()"
         #viewerContainer
       >
         <app-thumbnails
@@ -132,30 +130,26 @@ interface FileState {
           }
         </div>
 
-        @if (!zenMode()) {
-          <div class="page-indicator">
-            @if (secondPageUrl()) {
-              {{ currentPageIndex() + 1 }}-{{ currentPageIndex() + 2 }} / {{ fileState()!.totalPages }}
-            } @else {
-              {{ currentPageIndex() + 1 }} / {{ fileState()!.totalPages }}
-            }
-            @if (zoomPan.isZoomed()) {
-              <span class="zoom-label">{{ zoomPan.getZoomLabel() }}</span>
-            }
-            @if (zoomPan.hasFilters()) {
-              <span class="filter-label">B:{{ zoomPan.brightness() }} C:{{ zoomPan.contrast() }}</span>
-            }
-            <span class="mode-label">{{ readerState.getReadingModeLabel() }}</span>
-          </div>
-        }
+        <div class="page-indicator">
+          @if (secondPageUrl()) {
+            {{ currentPageIndex() + 1 }}-{{ currentPageIndex() + 2 }} / {{ fileState()!.totalPages }}
+          } @else {
+            {{ currentPageIndex() + 1 }} / {{ fileState()!.totalPages }}
+          }
+          @if (zoomPan.isZoomed()) {
+            <span class="zoom-label">{{ zoomPan.getZoomLabel() }}</span>
+          }
+          @if (zoomPan.hasFilters()) {
+            <span class="filter-label">B:{{ zoomPan.brightness() }} C:{{ zoomPan.contrast() }}</span>
+          }
+          <span class="mode-label">{{ readerState.getReadingModeLabel() }}</span>
+        </div>
 
-        @if (!zenMode()) {
-          <app-toolbar
-            [currentPage]="currentPageIndex()"
-            [totalPages]="fileState()!.totalPages"
-            (pageChange)="goToPage($event)"
-          />
-        }
+        <app-toolbar
+          [currentPage]="currentPageIndex()"
+          [totalPages]="fileState()!.totalPages"
+          (pageChange)="goToPage($event)"
+        />
 
         @if (showGoToPage()) {
           <div class="goto-overlay" (click)="showGoToPage.set(false)">
@@ -200,7 +194,6 @@ interface FileState {
       &.drag-over { background: #2a2a3a; outline: 2px dashed #667; outline-offset: -8px; }
       &.vertical-mode { overflow-y: auto; align-items: flex-start; }
       &.zoomed { cursor: grab; &:active { cursor: grabbing; } }
-      &.zen-mode { cursor: none; &:hover { cursor: default; } }
     }
 
     .viewer-reading { cursor: default; }
@@ -316,7 +309,6 @@ export class ViewerComponent implements OnInit, OnDestroy {
   isDragOver = signal(false);
   showGoToPage = signal(false);
   showThumbnails = signal(true);
-  zenMode = signal(false);
   isAlwaysOnTop = signal(false);
   isFullscreen = signal(false);
   recentFiles = signal<RecentFile[]>([]);
@@ -527,7 +519,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
       'open-file': 'open-file', 'new-window': 'new-window',
       'thumbnails': 'toggle-thumbnails', 'goto-page': 'goto-page',
       'reset-filters': 'reset-filters', 'close-file': 'close-file',
-      'zen-mode': 'toggle-zen', 'fullscreen': 'toggle-fullscreen',
+      'fullscreen': 'toggle-fullscreen',
       'add-bookmark': 'add-bookmark',
     };
     const mapped = actionMap[action.type];
@@ -544,29 +536,11 @@ export class ViewerComponent implements OnInit, OnDestroy {
     });
   }
 
-  // --- Zen mode ---
-
-  toggleZenMode(): void {
-    const entering = !this.zenMode();
-    this.zenMode.set(entering);
-    if (entering) {
-      this.showThumbnails.set(true);
-      if (!this.isFullscreen()) this.electron.toggleFullscreen();
-    } else {
-      if (this.isFullscreen()) this.electron.toggleFullscreen();
-    }
-  }
-
-  onDoubleClick(): void {
-    if (this.fileState()) this.toggleZenMode();
-  }
-
   // --- Keyboard ---
 
   @HostListener('window:keydown', ['$event'])
   onKeyDown(event: KeyboardEvent): void {
     if (event.key === 'Escape') {
-      if (this.zenMode()) { this.toggleZenMode(); return; }
       if (this.showGoToPage()) { this.showGoToPage.set(false); return; }
       if (this.showThumbnails()) { this.showThumbnails.set(false); return; }
       return;
@@ -625,7 +599,6 @@ export class ViewerComponent implements OnInit, OnDestroy {
       case 'toggle-page-layout': this.readerState.togglePageLayout(); this.refreshCurrentPage(); this.persistSettings(); break;
       case 'cycle-fit-mode': this.readerState.cycleFitMode(); this.persistSettings(); break;
       case 'toggle-thumbnails': this.showThumbnails.update(v => !v); break;
-      case 'toggle-zen': this.toggleZenMode(); break;
       case 'toggle-fullscreen': this.electron.toggleFullscreen(); break;
       case 'add-bookmark': this.addBookmark(); break;
     }

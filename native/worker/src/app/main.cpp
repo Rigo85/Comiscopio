@@ -28,7 +28,8 @@
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
-static constexpr double kSlowPageLogThresholdMs = 400.0;
+static constexpr double kSlowPageLogThresholdMs = 150.0;
+static constexpr double kVerySlowPageLogThresholdMs = 300.0;
 
 static std::string isoTimestampUtc() {
     using namespace std::chrono;
@@ -352,8 +353,9 @@ int main(int argc, char* argv[]) {
         totalPageMs += result.pageMs;
         totalOptimizedPageMs += pageMs;
         optimizedPageCount++;
-        if (pageMs >= kSlowPageLogThresholdMs || result.bypassed) {
-            logDiagnostic("info", "worker", "slow_page",
+        if (pageMs >= kSlowPageLogThresholdMs) {
+            const char* eventName = pageMs >= kVerySlowPageLogThresholdMs ? "very_slow_page" : "slow_page";
+            logDiagnostic("info", "worker", eventName,
                 "page=%d totalMs=%.1f decodeMs=%.1f thumbMs=%.1f pageMs=%.1f bypassed=%d entry=%s",
                 pageIndex, pageMs, result.decodeMs, result.thumbMs, result.pageMs,
                 result.bypassed ? 1 : 0, json(entryName).dump().c_str());
@@ -411,8 +413,9 @@ int main(int argc, char* argv[]) {
         totalPageMs += result.pageMs;
         totalOptimizedPageMs += pageMs;
         optimizedPageCount++;
-        if (pageMs >= kSlowPageLogThresholdMs || result.bypassed) {
-            logDiagnostic("info", "worker", "slow_preview_page",
+        if (pageMs >= kSlowPageLogThresholdMs) {
+            const char* eventName = pageMs >= kVerySlowPageLogThresholdMs ? "very_slow_preview_page" : "slow_preview_page";
+            logDiagnostic("info", "worker", eventName,
                 "page=0 totalMs=%.1f decodeMs=%.1f thumbMs=%.1f pageMs=%.1f bypassed=%d entry=%s",
                 pageMs, result.decodeMs, result.thumbMs, result.pageMs,
                 result.bypassed ? 1 : 0, json(entryName).dump().c_str());

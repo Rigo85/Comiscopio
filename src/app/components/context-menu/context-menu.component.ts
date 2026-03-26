@@ -15,7 +15,6 @@ export interface ContextMenuAction {
     | 'reset-filters'
     | 'close-file'
     | 'new-window'
-    | 'zen-mode'
     | 'add-bookmark'
     | 'goto-bookmark'
 
@@ -224,8 +223,6 @@ export class ContextMenuComponent {
 
     items.push({ label: 'Siempre visible', action: { type: 'always-on-top' }, active: this.isAlwaysOnTop() });
     items.push({ label: 'Pantalla completa', action: { type: 'fullscreen' }, active: this.isFullscreen() });
-    items.push({ label: 'Modo zen', action: { type: 'zen-mode' } });
-
     this.menuItems.set(items);
   }
 }

@@ -47,7 +47,6 @@ export const DEFAULT_KEYBINDINGS: KeyBinding[] = [
 
   // UI
   { action: 'toggle-thumbnails', label: 'Mostrar miniaturas', keys: 't' },
-  { action: 'toggle-zen', label: 'Modo zen', keys: 'z' },
   { action: 'toggle-fullscreen', label: 'Pantalla completa', keys: 'F11' },
   { action: 'add-bookmark', label: 'Agregar marcador', keys: 'b' },
 ];
