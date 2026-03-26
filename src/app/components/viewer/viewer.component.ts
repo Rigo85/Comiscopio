@@ -25,6 +25,13 @@ interface ShortcutSection {
   items: KeyBinding[];
 }
 
+interface VerticalPageItem {
+  index: number;
+  ready: boolean;
+  url: string | null;
+  aspectRatio: string | null;
+}
+
 @Component({
   selector: 'app-viewer',
   imports: [ToolbarComponent, ContextMenuComponent, ThumbnailsComponent],
@@ -175,29 +182,53 @@ interface ShortcutSection {
           class="pages-wrapper"
           [class.double-layout]="isDoublePage()"
           [class.rtl-layout]="readerState.isReversed()"
+          [class.vertical-strip]="readerState.isVertical()"
           [class.with-thumbnails]="showThumbnails()"
+          (scroll)="onViewerScroll()"
           [style.transform]="zoomPan.transformStyle()"
           [style.filter]="zoomPan.filterStyle()"
+          #pagesWrapper
         >
-          @if (currentPageUrl()) {
-            <img
-              class="viewer-image"
-              [class]="fitClass()"
-              [src]="currentPageUrl()"
-              [alt]="'Página ' + (currentPageIndex() + 1)"
-              (error)="onCurrentImageError()"
-              draggable="false"
-            />
-          }
-          @if (secondPageUrl()) {
-            <img
-              class="viewer-image"
-              [class]="fitClass()"
-              [src]="secondPageUrl()"
-              [alt]="'Página ' + (currentPageIndex() + 2)"
-              (error)="onSecondImageError()"
-              draggable="false"
-            />
+          @if (readerState.isVertical()) {
+            @for (page of verticalPages(); track page.index) {
+              <div
+                class="vertical-page"
+                [attr.data-page-index]="page.index"
+                [style.aspect-ratio]="page.aspectRatio"
+              >
+                @if (page.url) {
+                  <img
+                    class="viewer-image vertical-image"
+                    [src]="page.url"
+                    [alt]="'Página ' + (page.index + 1)"
+                    draggable="false"
+                  />
+                } @else {
+                  <div class="vertical-placeholder">Página {{ page.index + 1 }}</div>
+                }
+              </div>
+            }
+          } @else {
+            @if (currentPageUrl()) {
+              <img
+                class="viewer-image"
+                [class]="fitClass()"
+                [src]="currentPageUrl()"
+                [alt]="'Página ' + (currentPageIndex() + 1)"
+                (error)="onCurrentImageError()"
+                draggable="false"
+              />
+            }
+            @if (secondPageUrl()) {
+              <img
+                class="viewer-image"
+                [class]="fitClass()"
+                [src]="secondPageUrl()"
+                [alt]="'Página ' + (currentPageIndex() + 2)"
+                (error)="onSecondImageError()"
+                draggable="false"
+              />
+            }
           }
         </div>
 
@@ -263,7 +294,7 @@ interface ShortcutSection {
       display: flex; align-items: center; justify-content: center;
       background: #1a1a1a; position: relative; overflow: hidden;
       &.drag-over { background: #2a2a3a; outline: 2px dashed #667; outline-offset: -8px; }
-      &.vertical-mode { overflow-y: auto; align-items: flex-start; }
+      &.vertical-mode { align-items: stretch; }
       &.pannable { cursor: grab; &:active { cursor: grabbing; } }
     }
 
@@ -278,6 +309,15 @@ interface ShortcutSection {
       &.double-layout { gap: 2px; }
       &.rtl-layout { flex-direction: row-reverse; }
       &.with-thumbnails { margin-left: 160px; width: calc(100% - 160px); }
+      &.vertical-strip {
+        flex-direction: column;
+        align-items: center;
+        justify-content: flex-start;
+        height: 100%;
+        padding: 16px 0 40px;
+        gap: 12px;
+        overflow-y: auto;
+      }
     }
 
     .viewer-welcome {
@@ -319,6 +359,32 @@ interface ShortcutSection {
     .double-layout .viewer-image {
       &.fit-width { width: 50%; }
       &.fit-page { max-width: 50%; }
+    }
+    .vertical-page {
+      width: min(100%, 980px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      scroll-margin-top: 12px;
+    }
+    .vertical-image {
+      width: 100%;
+      height: auto;
+      max-width: 100%;
+      max-height: none;
+      object-fit: contain;
+    }
+    .vertical-placeholder {
+      width: 100%;
+      min-height: 240px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #666;
+      background: #202020;
+      border: 1px solid #2c2c2c;
+      border-radius: 8px;
+      font-size: 0.9rem;
     }
 
     .page-indicator {
@@ -516,6 +582,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
   recentFiles = signal<RecentFile[]>([]);
   pageSource = signal<PageArtifactSource>('optimized');
   shortcuts = signal<KeyBinding[]>([]);
+  private verticalRenderVersion = signal(0);
   readonly appMetadata = APP_METADATA;
   shortcutSections = computed<ShortcutSection[]>(() => {
     const groups: Array<{ title: string; actions: string[] }> = [
@@ -549,6 +616,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
   private pageReadyRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private pageReadyRetryToken = 0;
   private postCloseTimers: Array<ReturnType<typeof setTimeout>> = [];
+  private verticalScrollFramePending = false;
 
   isDoublePage = computed(() => {
     return this.readerState.pageLayout() === 'double'
@@ -557,7 +625,26 @@ export class ViewerComponent implements OnInit, OnDestroy {
   });
 
   canPanReader = computed(() => {
+    if (this.readerState.isVertical()) return false;
     return this.zoomPan.isZoomed() || this.readerState.fitMode() === 'original';
+  });
+
+  verticalPages = computed<VerticalPageItem[]>(() => {
+    const state = this.fileState();
+    const source = this.pageSource();
+    this.verticalRenderVersion();
+    if (!state || !this.readerState.isVertical()) return [];
+
+    return Array.from({ length: state.totalPages }, (_, index) => {
+      const ready = this.pageCache.isReady(index);
+      const meta = this.pageCache.getPageMeta(index, source);
+      return {
+        index,
+        ready,
+        url: ready ? this.buildPageUrl(index, source) : null,
+        aspectRatio: meta && meta.width > 0 && meta.height > 0 ? `${meta.width} / ${meta.height}` : null,
+      };
+    });
   });
 
   fitClass = computed(() => {
@@ -570,6 +657,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
   });
 
   @ViewChild('viewerContainer') viewerContainer?: ElementRef<HTMLElement>;
+  @ViewChild('pagesWrapper') pagesWrapper?: ElementRef<HTMLElement>;
   @ViewChild('contextMenu') contextMenu!: ContextMenuComponent;
 
   private unsubFileOpened?: () => void;
@@ -639,6 +727,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
       case 'archive':
         void this.refreshManifest(hash);
         queueMicrotask(() => {
+          this.bumpVerticalRenderVersion();
           void this.completeOpen(hash, event.totalPages);
         });
         break;
@@ -648,6 +737,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
         // A page is available on disk
         this.pageCache.markReady(event.page);
         this.thumbnailCache.markReady(event.page);
+        this.bumpVerticalRenderVersion();
 
         // If this is the page we're waiting for, show it
         if (this.currentPageIndex() === event.page && this.fileState()) {
@@ -723,6 +813,13 @@ export class ViewerComponent implements OnInit, OnDestroy {
     switch (action.type) {
       case 'reading-mode':
         this.readerState.readingMode.set(action.value);
+        if (action.value === 'vertical') {
+          this.secondPageUrl.set(null);
+          this.bumpVerticalRenderVersion();
+          this.scrollVerticalPageIntoView(this.currentPageIndex());
+        } else {
+          this.refreshCurrentPage();
+        }
         this.persistSettings();
         return;
       case 'fit-mode':
@@ -840,7 +937,18 @@ export class ViewerComponent implements OnInit, OnDestroy {
       case 'contrast-up': this.zoomPan.adjustContrast(5); break;
       case 'contrast-down': this.zoomPan.adjustContrast(-5); break;
       case 'reset-filters': this.zoomPan.resetFilters(); break;
-      case 'cycle-reading-mode': this.readerState.cycleReadingMode(); this.persistSettings(); break;
+      case 'cycle-reading-mode': {
+        const mode = this.readerState.cycleReadingMode();
+        if (mode === 'vertical') {
+          this.secondPageUrl.set(null);
+          this.bumpVerticalRenderVersion();
+          this.scrollVerticalPageIntoView(this.currentPageIndex());
+        } else {
+          this.refreshCurrentPage();
+        }
+        this.persistSettings();
+        break;
+      }
       case 'toggle-page-layout': this.readerState.togglePageLayout(); this.refreshCurrentPage(); this.persistSettings(); break;
       case 'cycle-fit-mode': this.readerState.cycleFitMode(); this.persistSettings(); break;
       case 'toggle-thumbnails': this.showThumbnails.update(v => !v); break;
@@ -853,7 +961,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
 
   @HostListener('click', ['$event'])
   onClick(event: MouseEvent): void {
-    if (!this.fileState() || this.showGoToPage() || this.canPanReader()) return;
+    if (!this.fileState() || this.showGoToPage() || this.canPanReader() || this.readerState.isVertical()) return;
     const target = event.target as HTMLElement;
     if (target.tagName === 'BUTTON' || target.tagName === 'INPUT' ||
         target.closest('app-thumbnails') || target.closest('app-toolbar') || target.closest('app-context-menu')) return;
@@ -902,6 +1010,15 @@ export class ViewerComponent implements OnInit, OnDestroy {
     this.lastPanX = event.clientX; this.lastPanY = event.clientY;
   }
   onPanEnd(): void { this.isPanning = false; }
+
+  onViewerScroll(): void {
+    if (!this.readerState.isVertical() || this.verticalScrollFramePending) return;
+    this.verticalScrollFramePending = true;
+    requestAnimationFrame(() => {
+      this.verticalScrollFramePending = false;
+      this.syncVerticalCurrentPage();
+    });
+  }
 
   @HostListener('window:dragenter', ['$event'])
   onWindowDragEnter(event: DragEvent): void {
@@ -1039,6 +1156,14 @@ export class ViewerComponent implements OnInit, OnDestroy {
       this.currentPageMeta = this.pageCache.getPageMeta(index, this.pageSource());
       this.currentImageRetryKey = null;
       this.clearPageReadyRetry();
+      if (this.readerState.isVertical()) {
+        this.currentPageUrl.set(this.pageCache.isReady(index) ? this.buildPageUrl(index, this.pageSource()) : null);
+        this.secondPageUrl.set(null);
+        this.zoomPan.resetOnPageChange();
+        this.scrollVerticalPageIntoView(index);
+        this.saveProgress(s, index);
+        return;
+      }
       if (this.pageCache.isReady(index)) {
         this.currentPageUrl.set(this.buildPageUrl(index, this.pageSource()));
       } else {
@@ -1098,18 +1223,31 @@ export class ViewerComponent implements OnInit, OnDestroy {
 
   private refreshCurrentPage(): void {
     this.navigating = false;
+    if (this.readerState.isVertical()) {
+      this.currentPageUrl.set(this.pageCache.isReady(this.currentPageIndex())
+        ? this.buildPageUrl(this.currentPageIndex(), this.pageSource())
+        : null);
+      this.secondPageUrl.set(null);
+      this.currentPageMeta = this.pageCache.getPageMeta(this.currentPageIndex(), this.pageSource());
+      this.bumpVerticalRenderVersion();
+      return;
+    }
     this.goToPage(this.currentPageIndex());
   }
 
   private resetReaderScrollPosition(): void {
-    const container = this.viewerContainer?.nativeElement;
+    const container = this.readerState.isVertical()
+      ? this.pagesWrapper?.nativeElement
+      : this.viewerContainer?.nativeElement;
     if (!container) return;
 
     container.scrollTop = 0;
     container.scrollLeft = 0;
 
     requestAnimationFrame(() => {
-      const currentContainer = this.viewerContainer?.nativeElement;
+      const currentContainer = this.readerState.isVertical()
+        ? this.pagesWrapper?.nativeElement
+        : this.viewerContainer?.nativeElement;
       if (!currentContainer) return;
       currentContainer.scrollTop = 0;
       currentContainer.scrollLeft = 0;
@@ -1259,6 +1397,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
       const manifest = await this.electron.getWorkerManifest(fileHash);
       if (manifest?.pages) {
         this.pageCache.updateManifest(manifest.pages);
+        this.bumpVerticalRenderVersion();
       }
     } catch {
       // Ignore transient read/write races while worker updates manifest.
@@ -1284,6 +1423,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
     this.previewInitializedHash = fileHash;
     this.clearPreviewProbe();
     this.fileState.update(s => s ? { ...s, totalPages: Math.max(s.totalPages, pageIndex + 1) } : s);
+    this.bumpVerticalRenderVersion();
     this.reportRendererStats('preview-ready');
   }
 
@@ -1373,6 +1513,51 @@ export class ViewerComponent implements OnInit, OnDestroy {
       clearTimeout(timer);
     }
     this.postCloseTimers = [];
+  }
+
+  private bumpVerticalRenderVersion(): void {
+    this.verticalRenderVersion.update((value) => value + 1);
+  }
+
+  private scrollVerticalPageIntoView(index: number): void {
+    requestAnimationFrame(() => {
+      const container = this.pagesWrapper?.nativeElement;
+      const target = container?.querySelector(`[data-page-index="${index}"]`) as HTMLElement | null;
+      if (!container || !target) return;
+      target.scrollIntoView({ block: 'start' });
+    });
+  }
+
+  private syncVerticalCurrentPage(): void {
+    const state = this.fileState();
+    const container = this.pagesWrapper?.nativeElement;
+    if (!state || !container) return;
+
+    const containerRect = container.getBoundingClientRect();
+    const centerY = containerRect.top + (container.clientHeight * 0.35);
+    const pages = Array.from(container.querySelectorAll('.vertical-page')) as HTMLElement[];
+    let bestIndex = this.currentPageIndex();
+    let bestDistance = Number.POSITIVE_INFINITY;
+
+    for (const page of pages) {
+      const rect = page.getBoundingClientRect();
+      if (rect.bottom < containerRect.top || rect.top > containerRect.bottom) continue;
+      const pageCenter = rect.top + rect.height / 2;
+      const distance = Math.abs(pageCenter - centerY);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestIndex = Number(page.dataset['pageIndex'] ?? bestIndex);
+      }
+    }
+
+    if (bestIndex === this.currentPageIndex()) return;
+
+    this.currentPageIndex.set(bestIndex);
+    this.currentPageMeta = this.pageCache.getPageMeta(bestIndex, this.pageSource());
+    this.currentPageUrl.set(this.pageCache.isReady(bestIndex) ? this.buildPageUrl(bestIndex, this.pageSource()) : null);
+    this.secondPageUrl.set(null);
+    this.pageCache.navigateTo(bestIndex, this.pageSource());
+    this.saveProgress(state, bestIndex);
   }
 
   private buildPageUrl(pageIndex: number, source: PageArtifactSource, retry = 0): string {
