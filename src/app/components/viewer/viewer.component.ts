@@ -546,6 +546,8 @@ export class ViewerComponent implements OnInit, OnDestroy {
   private currentImageRetryKey: string | null = null;
   private secondImageRetryKey: string | null = null;
   private previewProbeTimer: ReturnType<typeof setTimeout> | null = null;
+  private pageReadyRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private pageReadyRetryToken = 0;
   private postCloseTimers: Array<ReturnType<typeof setTimeout>> = [];
 
   isDoublePage = computed(() => {
@@ -649,6 +651,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
 
         // If this is the page we're waiting for, show it
         if (this.currentPageIndex() === event.page && this.fileState()) {
+          this.clearPageReadyRetry();
           this.currentPageUrl.set(this.buildPageUrl(event.page, this.pageSource()));
           this.currentPageMeta = this.pageCache.getPageMeta(event.page, this.pageSource());
           this.currentImageRetryKey = null;
@@ -958,6 +961,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
       this.openingFileHash = null;
       this.openingSessionId = null;
       this.clearPreviewProbe();
+      this.clearPageReadyRetry();
       this.resetViewerState();
       this.loading.set(false);
       this.loadingMessage.set('Abriendo archivo...');
@@ -1034,7 +1038,12 @@ export class ViewerComponent implements OnInit, OnDestroy {
       this.currentPageIndex.set(index);
       this.currentPageMeta = this.pageCache.getPageMeta(index, this.pageSource());
       this.currentImageRetryKey = null;
-      this.currentPageUrl.set(this.pageCache.isReady(index) ? this.buildPageUrl(index, this.pageSource()) : null);
+      this.clearPageReadyRetry();
+      if (this.pageCache.isReady(index)) {
+        this.currentPageUrl.set(this.buildPageUrl(index, this.pageSource()));
+      } else {
+        this.schedulePageReadyRetry(index, this.pageSource());
+      }
       this.zoomPan.resetOnPageChange();
       this.resetReaderScrollPosition();
       this.loadSecondPage(index);
@@ -1075,9 +1084,11 @@ export class ViewerComponent implements OnInit, OnDestroy {
       return;
     }
     this.secondImageRetryKey = null;
-    this.secondPageUrl.set(this.pageCache.isReady(secondIndex)
-      ? this.buildPageUrl(secondIndex, this.pageSource())
-      : null);
+    if (this.pageCache.isReady(secondIndex)) {
+      this.secondPageUrl.set(this.buildPageUrl(secondIndex, this.pageSource()));
+    } else {
+      this.secondPageUrl.set(null);
+    }
   }
 
   private getNavigationStep(): number {
@@ -1125,6 +1136,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
       this.currentImageRetryKey = null;
       this.secondImageRetryKey = null;
       this.clearPreviewProbe();
+      this.clearPageReadyRetry();
       this.zoomPan.resetAll();
       this.electron.workerClose(s.fileHash, { sessionId: s.sessionId, reason });
       this.reportRendererStats('close-after-worker-close', { reason, sessionId: s.sessionId });
@@ -1148,6 +1160,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
     this.currentImageRetryKey = null;
     this.secondImageRetryKey = null;
     this.clearPreviewProbe();
+    this.clearPageReadyRetry();
     this.zoomPan.resetAll();
   }
 
@@ -1306,6 +1319,43 @@ export class ViewerComponent implements OnInit, OnDestroy {
     if (this.previewProbeTimer) {
       clearTimeout(this.previewProbeTimer);
       this.previewProbeTimer = null;
+    }
+  }
+
+  private schedulePageReadyRetry(pageIndex: number, source: PageArtifactSource, attempt = 0, token?: number): void {
+    const retryToken = token ?? ++this.pageReadyRetryToken;
+    if (token === undefined) {
+      this.clearPageReadyRetry();
+    }
+
+    this.pageReadyRetryTimer = setTimeout(() => {
+      if (retryToken !== this.pageReadyRetryToken) {
+        return;
+      }
+      if (this.currentPageIndex() !== pageIndex || this.pageSource() !== source) {
+        return;
+      }
+      if (this.pageCache.isReady(pageIndex)) {
+        this.currentPageUrl.set(this.buildPageUrl(pageIndex, source));
+        this.currentPageMeta = this.pageCache.getPageMeta(pageIndex, source);
+        this.clearPageReadyRetry();
+        this.loadSecondPage(pageIndex);
+        return;
+      }
+      if (attempt < 15) {
+        this.schedulePageReadyRetry(pageIndex, source, attempt + 1, retryToken);
+        return;
+      }
+      this.currentPageUrl.set(null);
+      this.clearPageReadyRetry();
+    }, attempt === 0 ? 40 : 60);
+  }
+
+  private clearPageReadyRetry(): void {
+    this.pageReadyRetryToken += 1;
+    if (this.pageReadyRetryTimer) {
+      clearTimeout(this.pageReadyRetryTimer);
+      this.pageReadyRetryTimer = null;
     }
   }
 
