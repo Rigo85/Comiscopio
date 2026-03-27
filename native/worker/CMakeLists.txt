@@ -17,8 +17,11 @@ find_package(nlohmann_json REQUIRED)
 set(SOURCES
     src/app/main.cpp
     src/app/work_queue.cpp
+    src/archive/libarchive_base.cpp
     src/archive/rar_backend.cpp
     src/archive/zip_backend.cpp
+    src/archive/sevenz_backend.cpp
+    src/archive/tar_backend.cpp
     src/image/image_pipeline.cpp
     src/image/placeholder.cpp
     src/output/manifest.cpp

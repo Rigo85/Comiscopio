@@ -199,8 +199,12 @@ export class NativeWorkerBridge {
         session.cleanupTimer = null;
       }
       session.process = null;
-      this.cleanupSessionArtifacts(session);
-      this.sessions.delete(fileHash);
+      // Only cleanup if this session is still the active one for this hash.
+      // A replacement session may already be in the map using the same output dir.
+      if (this.sessions.get(fileHash) === session) {
+        this.cleanupSessionArtifacts(session);
+        this.sessions.delete(fileHash);
+      }
       if (!session.cancelled && code !== 0) {
         listener({ type: 'error', message: `Worker exited with code ${code}` });
       }
@@ -323,7 +327,9 @@ export class NativeWorkerBridge {
     const ext = path.extname(filePath).toLowerCase();
     if (ext === '.cbr' || ext === '.rar') return 'rar';
     if (ext === '.cbz' || ext === '.zip') return 'zip';
-    return 'rar'; // default for now
+    if (ext === '.cb7' || ext === '.7z') return '7z';
+    if (ext === '.cbt' || ext === '.tar' || ext === '.tgz') return 'tar';
+    return 'rar'; // default fallback
   }
 
   private detectBackendByMagic(filePath: string): string | null {
@@ -333,8 +339,9 @@ export class NativeWorkerBridge {
 
       const fd = fs.openSync(filePath, 'r');
       try {
-        const header = Buffer.alloc(8);
+        const header = Buffer.alloc(262);
         const bytesRead = fs.readSync(fd, header, 0, header.length, 0);
+        // RAR v4/v5: 0x526172211A07
         if (bytesRead >= 7) {
           const rar4 = Buffer.from([0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x00]);
           const rar5 = Buffer.from([0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x01, 0x00]);
@@ -342,10 +349,40 @@ export class NativeWorkerBridge {
             return 'rar';
           }
         }
+        // ZIP: PK signature
         if (bytesRead >= 4) {
           const signature = header.readUInt32LE(0);
           if (signature === 0x04034b50 || signature === 0x06054b50 || signature === 0x08074b50) {
             return 'zip';
+          }
+        }
+        // 7z: 0x377ABCAF271C
+        if (bytesRead >= 6) {
+          const sevenz = Buffer.from([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c]);
+          if (header.subarray(0, 6).equals(sevenz)) {
+            return '7z';
+          }
+        }
+        // TAR: "ustar" at offset 257
+        if (bytesRead >= 262) {
+          const ustar = header.subarray(257, 262).toString('ascii');
+          if (ustar === 'ustar') {
+            return 'tar';
+          }
+        }
+        // gzip (tar.gz): 0x1F8B
+        if (bytesRead >= 2 && header[0] === 0x1f && header[1] === 0x8b) {
+          return 'tar';
+        }
+        // bzip2 (tar.bz2): 0x425A68 ("BZh")
+        if (bytesRead >= 3 && header[0] === 0x42 && header[1] === 0x5a && header[2] === 0x68) {
+          return 'tar';
+        }
+        // xz (tar.xz): 0xFD377A585A00
+        if (bytesRead >= 6) {
+          const xz = Buffer.from([0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00]);
+          if (header.subarray(0, 6).equals(xz)) {
+            return 'tar';
           }
         }
       } finally {

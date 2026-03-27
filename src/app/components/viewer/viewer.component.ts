@@ -1187,6 +1187,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
   }
 
   onDrop(event: DragEvent): void {
+    event.stopPropagation(); // Prevent window:drop from also firing
     this.handleGlobalDrop(event);
   }
 

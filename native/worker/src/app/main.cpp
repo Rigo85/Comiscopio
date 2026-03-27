@@ -79,6 +79,8 @@ static void logDiagnostic(const char* level, const char* source, const char* eve
 
 extern std::unique_ptr<ArchiveBackend> createRarBackend();
 extern std::unique_ptr<ArchiveBackend> createZipBackend();
+extern std::unique_ptr<ArchiveBackend> createSevenZBackend();
+extern std::unique_ptr<ArchiveBackend> createTarBackend();
 
 static std::string getExtension(const std::string& filename) {
     auto pos = filename.rfind('.');
@@ -298,7 +300,7 @@ int main(int argc, char* argv[]) {
         logDiagnostic("error", "worker", "input_not_found", "input=%s", json(args.input).dump().c_str());
         return 1;
     }
-    if (args.backend != "rar" && args.backend != "zip") {
+    if (args.backend != "rar" && args.backend != "zip" && args.backend != "7z" && args.backend != "tar") {
         logDiagnostic("error", "worker", "unsupported_backend", "backend=%s", json(args.backend).dump().c_str());
         return 1;
     }
@@ -516,6 +518,8 @@ int main(int argc, char* argv[]) {
         std::unique_ptr<ArchiveBackend> previewBackend;
         if (args.backend == "rar") previewBackend = createRarBackend();
         else if (args.backend == "zip") previewBackend = createZipBackend();
+        else if (args.backend == "7z") previewBackend = createSevenZBackend();
+        else if (args.backend == "tar") previewBackend = createTarBackend();
 
         auto previewStart = std::chrono::steady_clock::now();
         try {
@@ -537,6 +541,8 @@ int main(int argc, char* argv[]) {
     std::unique_ptr<ArchiveBackend> backend;
     if (args.backend == "rar") backend = createRarBackend();
     else if (args.backend == "zip") backend = createZipBackend();
+    else if (args.backend == "7z") backend = createSevenZBackend();
+    else if (args.backend == "tar") backend = createTarBackend();
     int totalEntries;
 
     logDiagnostic("info", "worker", "phase_start", "phase=%s", json("extract_raw").dump().c_str());

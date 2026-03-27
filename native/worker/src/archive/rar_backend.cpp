@@ -33,7 +33,22 @@ static std::string getExtension(const std::string& filename) {
     return toLower(filename.substr(pos));
 }
 
+static std::string getBasename(const std::string& path) {
+    auto pos = path.find_last_of("/\\");
+    return (pos == std::string::npos) ? path : path.substr(pos + 1);
+}
+
+static bool isJunkEntry(const std::string& filename) {
+    const std::string base = getBasename(filename);
+    if (base.rfind("._", 0) == 0) return true;
+    if (filename.find("__MACOSX/") != std::string::npos) return true;
+    if (toLower(base) == "thumbs.db" || toLower(base) == "desktop.ini") return true;
+    if (!base.empty() && base[0] == '.') return true;
+    return false;
+}
+
 static bool isImageFile(const std::string& filename) {
+    if (isJunkEntry(filename)) return false;
     return IMAGE_EXTENSIONS.count(getExtension(filename)) > 0;
 }
 
