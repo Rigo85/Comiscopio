@@ -26,7 +26,7 @@ export class PageCacheService {
   private readyPages = new Set<number>();
   private pageVersions = new Map<number, number>();
   private generation = 0;
-  private manifestPages: any[] = [];
+  manifestPages: any[] = [];
 
   windowBefore = 2;
   windowAfter = 3;
@@ -49,6 +49,19 @@ export class PageCacheService {
 
   updateManifest(pages: any[]): void {
     this.manifestPages = pages;
+  }
+
+  /** Mark all pages that already have artifacts in the manifest as ready. */
+  syncReadyFromManifest(): void {
+    for (let i = 0; i < this.manifestPages.length; i++) {
+      const entry = this.manifestPages[i];
+      if (entry?.page) {
+        this.readyPages.add(i);
+        if (!this.pageVersions.has(i)) {
+          this.pageVersions.set(i, 1);
+        }
+      }
+    }
   }
 
   isReady(pageIndex: number): boolean {

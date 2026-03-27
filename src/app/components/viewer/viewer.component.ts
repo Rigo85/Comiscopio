@@ -883,11 +883,14 @@ export class ViewerComponent implements OnInit, OnDestroy {
     } else {
       this.pageCache.init(fileHash, totalPages, this.pageCache.windowBefore, this.pageCache.windowAfter);
       this.thumbnailCache.init(fileHash);
-      this.pageCache.markReady(0);
-      this.thumbnailCache.markReady(0);
       this.previewInitializedHash = null;
     }
     await this.refreshManifest(fileHash);
+
+    // Recover ready state for pages the worker already processed (preview or
+    // early processing) whose "ready" events were lost during cache re-init.
+    this.pageCache.syncReadyFromManifest();
+    this.thumbnailCache.syncReadyFromManifest(this.pageCache.manifestPages);
 
     this.fileState.update(s => s ? { ...s, totalPages } : s);
 

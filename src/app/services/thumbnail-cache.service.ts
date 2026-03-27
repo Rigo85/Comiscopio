@@ -42,6 +42,16 @@ export class ThumbnailCacheService {
     return `${THUMB_PROTOCOL}://${this.fileHash}/${pageIndex}?gen=${this.generation}&rev=${rev}`;
   }
 
+  /** Mark thumbs as ready from page-cache manifest entries. */
+  syncReadyFromManifest(manifestPages: any[]): void {
+    for (let i = 0; i < manifestPages.length; i++) {
+      const entry = manifestPages[i];
+      if (entry?.thumb && !this.readyThumbs.has(i)) {
+        this.markReady(i);
+      }
+    }
+  }
+
   subscribe(listener: (pageIndex: number, url: string) => void): () => void {
     this.listeners.push(listener);
     return () => {
