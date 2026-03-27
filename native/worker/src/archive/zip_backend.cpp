@@ -86,27 +86,6 @@ public:
                 continue;
             }
 
-            std::vector<uint8_t> buffer;
-            char chunk[64 * 1024];
-            la_ssize_t bytesRead = 0;
-            bool failed = false;
-            bool cancelled = false;
-
-            while ((bytesRead = archive_read_data(arc, chunk, sizeof(chunk))) > 0) {
-                if (isCancelledZip(userData)) {
-                    cancelled = true;
-                    break;
-                }
-                buffer.insert(buffer.end(), chunk, chunk + bytesRead);
-            }
-
-            if (bytesRead < 0) {
-                failed = true;
-            }
-            if (cancelled) {
-                break;
-            }
-
             std::string ext = getExtensionZip(name);
             if (ext.empty()) ext = ".bin";
 
@@ -114,16 +93,46 @@ public:
             snprintf(tmpName, sizeof(tmpName), "raw_%06d%s", imageCount, ext.c_str());
             std::string rawPath = rawDir + "/" + tmpName;
 
-            if (!failed && !buffer.empty()) {
-                std::ofstream out(rawPath, std::ios::binary);
-                out.write(reinterpret_cast<const char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
-                entries.push_back({name, rawPath});
+            // Stream directly to disk (no intermediate buffer)
+            std::ofstream out(rawPath, std::ios::binary | std::ios::trunc);
+            char chunk[64 * 1024];
+            la_ssize_t bytesRead = 0;
+            bool failed = false;
+            bool cancelled = false;
+
+            if (!out) {
+                failed = true;
             } else {
-                entries.push_back({name, ""});
+                while ((bytesRead = archive_read_data(arc, chunk, sizeof(chunk))) > 0) {
+                    if (isCancelledZip(userData)) {
+                        cancelled = true;
+                        break;
+                    }
+                    out.write(chunk, static_cast<std::streamsize>(bytesRead));
+                    if (!out.good()) {
+                        failed = true;
+                        break;
+                    }
+                }
+                if (bytesRead < 0) {
+                    failed = true;
+                }
+                out.close();
             }
 
-            buffer.clear();
-            buffer.shrink_to_fit();
+            if (cancelled) {
+                std::error_code ec;
+                fs::remove(rawPath, ec);
+                break;
+            }
+
+            if (!failed) {
+                entries.push_back({name, rawPath});
+            } else {
+                std::error_code ec;
+                fs::remove(rawPath, ec);
+                entries.push_back({name, ""});
+            }
 
             if (progressCb) {
                 progressCb(imageCount, -1, name, userData);

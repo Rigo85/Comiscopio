@@ -725,19 +725,25 @@ export class ViewerComponent implements OnInit, OnDestroy {
     return this.zoomPan.isZoomed() || this.readerState.fitMode() === 'original';
   });
 
+  /** Number of pages before/after current to actually load images for in vertical mode. */
+  private static readonly VERTICAL_IMG_WINDOW = 8;
+
   verticalPages = computed<VerticalPageItem[]>(() => {
     const state = this.fileState();
     const source = this.pageSource();
+    const currentPage = this.currentPageIndex();
     this.verticalRenderVersion();
     if (!state || !this.readerState.isVertical()) return [];
 
+    const window = ViewerComponent.VERTICAL_IMG_WINDOW;
     return Array.from({ length: state.totalPages }, (_, index) => {
       const ready = this.pageCache.isReady(index);
       const meta = this.pageCache.getPageMeta(index, source);
+      const inWindow = Math.abs(index - currentPage) <= window;
       return {
         index,
         ready,
-        url: ready ? this.buildPageUrl(index, source) : null,
+        url: ready && inWindow ? this.buildPageUrl(index, source) : null,
         aspectRatio: meta && meta.width > 0 && meta.height > 0 ? `${meta.width} / ${meta.height}` : null,
       };
     });

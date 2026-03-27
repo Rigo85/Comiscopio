@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as util from 'util';
+import { Readable } from 'stream';
 import { WindowManager } from './window-manager';
 import { NativeWorkerBridge } from './native-worker-bridge';
 import { Database } from './db/database';
@@ -259,9 +260,14 @@ function registerProtocolHandlers(): void {
         return new Response('Not found', { status: 404 });
       }
 
-      const bytes = await fs.promises.readFile(thumbPath);
-      return new Response(bytes, {
-        headers: { 'content-type': 'image/jpeg', 'cache-control': 'no-cache' },
+      const stat = await fs.promises.stat(thumbPath);
+      const stream = Readable.toWeb(fs.createReadStream(thumbPath)) as ReadableStream;
+      return new Response(stream, {
+        headers: {
+          'content-type': 'image/jpeg',
+          'content-length': String(stat.size),
+          'cache-control': 'no-cache',
+        },
       });
     } catch {
       if (isDev) {
@@ -294,10 +300,12 @@ function registerProtocolHandlers(): void {
         '.png': 'image/png', '.gif': 'image/gif', '.bmp': 'image/bmp',
       };
 
-      const bytes = await fs.promises.readFile(pagePath);
-      return new Response(bytes, {
+      const stat = await fs.promises.stat(pagePath);
+      const stream = Readable.toWeb(fs.createReadStream(pagePath)) as ReadableStream;
+      return new Response(stream, {
         headers: {
           'content-type': mimeTypes[ext] || 'application/octet-stream',
+          'content-length': String(stat.size),
           'cache-control': 'no-cache',
         },
       });

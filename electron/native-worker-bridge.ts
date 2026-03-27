@@ -261,13 +261,9 @@ export class NativeWorkerBridge {
   }
 
   private cleanupSessionArtifacts(session: WorkerSession): void {
-    try {
-      if (fs.existsSync(session.outputDir)) {
-        fs.rmSync(session.outputDir, { recursive: true, force: true });
-      }
-    } catch {
+    fs.promises.rm(session.outputDir, { recursive: true, force: true }).catch(() => {
       /* ignore cleanup errors */
-    }
+    });
   }
 
   /** Read the manifest.json from a session's output directory (cached) */
