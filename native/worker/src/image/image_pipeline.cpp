@@ -28,30 +28,32 @@ ImageResult processImage(
 ) {
     ImageResult result;
 
-    // --- Decode to get dimensions ---
+    // --- Decode header only for dimensions (no pixel decode) ---
     double t0 = nowMs();
 
-    VipsImage* image = nullptr;
-    if (vips_image_new_from_buffer(data.data(), data.size(), "", "access", VIPS_ACCESS_SEQUENTIAL, nullptr) == 0) {
-        // This path won't work for sequential + multiple consumers.
-        // Use thumbnail_buffer instead which handles shrink-on-load.
-    }
-
-    // Use vips_image_new_from_buffer with random access for dimension reading
-    image = vips_image_new_from_buffer(data.data(), data.size(), "", nullptr);
-    if (!image) {
+    const char* loader = vips_foreign_find_load_buffer(data.data(), data.size());
+    if (!loader) {
         result.ok = false;
-        result.errorMessage = "Failed to decode image: " + std::string(vips_error_buffer());
+        result.errorMessage = "Failed to detect image format: " + std::string(vips_error_buffer());
         vips_error_clear();
         return result;
     }
 
-    result.originalWidth = vips_image_get_width(image);
-    result.originalHeight = vips_image_get_height(image);
+    VipsImage* header = vips_image_new_from_buffer(data.data(), data.size(), "",
+        "access", VIPS_ACCESS_SEQUENTIAL, nullptr);
+    if (!header) {
+        result.ok = false;
+        result.errorMessage = "Failed to read image header: " + std::string(vips_error_buffer());
+        vips_error_clear();
+        return result;
+    }
+
+    result.originalWidth = vips_image_get_width(header);
+    result.originalHeight = vips_image_get_height(header);
     result.decodeMs = nowMs() - t0;
 
-    g_object_unref(image);
-    image = nullptr;
+    g_object_unref(header);
+    header = nullptr;
 
     // --- Generate thumbnail ---
     double t1 = nowMs();

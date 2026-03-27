@@ -23,6 +23,7 @@
 #ifndef _WIN32
 #include <poll.h>
 #include <unistd.h>
+#include <malloc.h>  // malloc_trim
 #endif
 
 namespace fs = std::filesystem;
@@ -192,6 +193,10 @@ struct ProcMemorySnapshot {
     long vmSizeKb = 0;
 };
 
+static double rssMb(const ProcMemorySnapshot& snapshot) {
+    return snapshot.vmRssKb / 1024.0;
+}
+
 static ProcMemorySnapshot readProcMemorySnapshot() {
     ProcMemorySnapshot snapshot;
 #ifndef _WIN32
@@ -208,19 +213,33 @@ static ProcMemorySnapshot readProcMemorySnapshot() {
 
 static void logWorkerMemory(const char* label) {
     ProcMemorySnapshot snapshot = readProcMemorySnapshot();
+    const double trackedMemMb = vips_tracked_get_mem() / (1024.0 * 1024.0);
+    const double trackedHighwaterMb = vips_tracked_get_mem_highwater() / (1024.0 * 1024.0);
+    const int trackedAllocs = vips_tracked_get_allocs();
+    const int cacheSize = vips_cache_get_size();
     logDiagnostic("info", "worker_mem", "snapshot",
-        "label=%s rss=%.1fMB hwm=%.1fMB vms=%.1fMB",
+        "label=%s rss=%.1fMB hwm=%.1fMB vms=%.1fMB "
+        "vipsTracked=%.1fMB vipsHighwater=%.1fMB vipsAllocs=%d vipsCache=%d",
         label,
         snapshot.vmRssKb / 1024.0,
         snapshot.vmHwmKb / 1024.0,
-        snapshot.vmSizeKb / 1024.0);
+        snapshot.vmSizeKb / 1024.0,
+        trackedMemMb,
+        trackedHighwaterMb,
+        trackedAllocs,
+        cacheSize);
 }
 
 static void logWorkerMemoryWithQueue(const char* label, const WorkQueue& queue, int processedCount) {
     ProcMemorySnapshot snapshot = readProcMemorySnapshot();
+    const double trackedMemMb = vips_tracked_get_mem() / (1024.0 * 1024.0);
+    const double trackedHighwaterMb = vips_tracked_get_mem_highwater() / (1024.0 * 1024.0);
+    const int trackedAllocs = vips_tracked_get_allocs();
+    const int cacheSize = vips_cache_get_size();
     logDiagnostic("info", "worker_mem", "snapshot",
         "label=%s rss=%.1fMB hwm=%.1fMB vms=%.1fMB processed=%d "
-        "priorityPending=%d queueSize=%d bgNext=%d donePages=%d doneThumb=%d",
+        "priorityPending=%d queueSize=%d bgNext=%d donePages=%d doneThumb=%d "
+        "vipsTracked=%.1fMB vipsHighwater=%.1fMB vipsAllocs=%d vipsCache=%d",
         label,
         snapshot.vmRssKb / 1024.0,
         snapshot.vmHwmKb / 1024.0,
@@ -230,7 +249,44 @@ static void logWorkerMemoryWithQueue(const char* label, const WorkQueue& queue, 
         queue.queuedItems(),
         queue.backgroundProgress(),
         queue.donePageCount(),
-        queue.doneThumbOnlyCount());
+        queue.doneThumbOnlyCount(),
+        trackedMemMb,
+        trackedHighwaterMb,
+        trackedAllocs,
+        cacheSize);
+}
+
+static void logMemoryDeltaIfLarge(const char* eventName,
+                                  int pageIndex,
+                                  size_t entryBytes,
+                                  const ProcMemorySnapshot& before,
+                                  const ProcMemorySnapshot& after,
+                                  const char* extraFmt = "",
+                                  ...) {
+    const double beforeMb = rssMb(before);
+    const double afterMb = rssMb(after);
+    const double deltaMb = afterMb - beforeMb;
+    if (std::abs(deltaMb) < 32.0) {
+        return;
+    }
+
+    char extraBuffer[512] = {0};
+    if (extraFmt && extraFmt[0] != '\0') {
+        va_list args;
+        va_start(args, extraFmt);
+        std::vsnprintf(extraBuffer, sizeof(extraBuffer), extraFmt, args);
+        va_end(args);
+    }
+
+    logDiagnostic("info", "worker_mem", eventName,
+        "page=%d entryBytes=%zu rssBefore=%.1fMB rssAfter=%.1fMB delta=%.1fMB%s%s",
+        pageIndex,
+        entryBytes,
+        beforeMb,
+        afterMb,
+        deltaMb,
+        extraBuffer[0] ? " " : "",
+        extraBuffer);
 }
 
 int main(int argc, char* argv[]) {
@@ -261,6 +317,9 @@ int main(int argc, char* argv[]) {
     if (args.vipsConcurrency > 0) {
         vips_concurrency_set(args.vipsConcurrency);
     }
+    vips_cache_set_max(100);
+    vips_cache_set_max_mem(64 * 1024 * 1024);
+    vips_cache_set_max_files(20);
 
     // Clean and create output
     if (fs::exists(args.output)) fs::remove_all(args.output);
@@ -305,6 +364,7 @@ int main(int argc, char* argv[]) {
             ? ("raw/" + idx + ".bin")
             : ("raw/" + idx + ext);
 
+        ProcMemorySnapshot beforeRead = readProcMemorySnapshot();
         if (!activeBackend.getEntry(pageIndex, entryData) || entryData.empty()) {
             std::string thumbFile = "thumbs/" + idx + ".jpg";
             std::string pageFile = "pages/" + idx + ".webp";
@@ -315,25 +375,46 @@ int main(int argc, char* argv[]) {
             manifest.write();
             return false;
         }
+        ProcMemorySnapshot afterRead = readProcMemorySnapshot();
+        logMemoryDeltaIfLarge("entry_read_delta", pageIndex, entryData.size(), beforeRead, afterRead);
 
         auto pageStart = std::chrono::steady_clock::now();
         std::string thumbFile = "thumbs/" + idx + ".jpg";
-        int maxDim = 0;
-        {
-            VipsImage* probe = vips_image_new_from_buffer(entryData.data(), entryData.size(), "", nullptr);
-            if (probe) {
-                maxDim = std::max(vips_image_get_width(probe), vips_image_get_height(probe));
-                g_object_unref(probe);
-            }
-        }
-
-        bool willBypass = (maxDim > 0 && maxDim <= config.readerMaxDimension);
         std::string optimizedExt = config.readerFormat == "jpeg" ? ".jpg" : ".webp";
-        std::string pageFile = willBypass ? ("pages/" + idx + ext) : ("pages/" + idx + optimizedExt);
+        std::string pageFile = "pages/" + idx + optimizedExt;
+        ProcMemorySnapshot beforeProcess = readProcMemorySnapshot();
         auto result = processImage(entryData, entryName, config,
             args.output + "/" + thumbFile, args.output + "/" + pageFile);
+        ProcMemorySnapshot afterProcess = readProcMemorySnapshot();
+        logMemoryDeltaIfLarge(
+            "process_image_delta",
+            pageIndex,
+            entryData.size(),
+            beforeProcess,
+            afterProcess,
+            "bypassed=%d thumbMs=%.1f pageMs=%.1f",
+            result.bypassed ? 1 : 0,
+            result.thumbMs,
+            result.pageMs);
+        entryData.clear();
+        entryData.shrink_to_fit();
+#ifndef _WIN32
+        malloc_trim(0);  // Force glibc to return free pages to OS
+#endif
+        ProcMemorySnapshot afterRelease = readProcMemorySnapshot();
+        logMemoryDeltaIfLarge("entry_release_delta", pageIndex, 0, afterProcess, afterRelease);
         auto pageEnd = std::chrono::steady_clock::now();
         double pageMs = std::chrono::duration<double, std::milli>(pageEnd - pageStart).count();
+
+        // If bypassed, rename to original extension so MIME type is correct
+        if (result.ok && result.bypassed) {
+            std::string bypassPageFile = "pages/" + idx + ext;
+            if (bypassPageFile != pageFile) {
+                std::error_code ec;
+                fs::rename(args.output + "/" + pageFile, args.output + "/" + bypassPageFile, ec);
+                if (!ec) pageFile = bypassPageFile;
+            }
+        }
 
         if (!result.ok) {
             std::string errPageFile = "pages/" + idx + ".webp";
@@ -378,22 +459,22 @@ int main(int argc, char* argv[]) {
 
         auto pageStart = std::chrono::steady_clock::now();
         std::string thumbFile = "thumbs/" + idx + ".jpg";
-        int maxDim = 0;
-        {
-            VipsImage* probe = vips_image_new_from_buffer(entryData.data(), entryData.size(), "", nullptr);
-            if (probe) {
-                maxDim = std::max(vips_image_get_width(probe), vips_image_get_height(probe));
-                g_object_unref(probe);
-            }
-        }
-
-        bool willBypass = (maxDim > 0 && maxDim <= config.readerMaxDimension);
         std::string optimizedExt = config.readerFormat == "jpeg" ? ".jpg" : ".webp";
-        std::string pageFile = willBypass ? ("pages/" + idx + ext) : ("pages/" + idx + optimizedExt);
+        std::string pageFile = "pages/" + idx + optimizedExt;
         auto result = processImage(entryData, entryName, config,
             args.output + "/" + thumbFile, args.output + "/" + pageFile);
         auto pageEnd = std::chrono::steady_clock::now();
         double pageMs = std::chrono::duration<double, std::milli>(pageEnd - pageStart).count();
+
+        // If bypassed, rename to original extension so MIME type is correct
+        if (result.ok && result.bypassed) {
+            std::string bypassPageFile = "pages/" + idx + ext;
+            if (bypassPageFile != pageFile) {
+                std::error_code ec;
+                fs::rename(args.output + "/" + pageFile, args.output + "/" + bypassPageFile, ec);
+                if (!ec) pageFile = bypassPageFile;
+            }
+        }
 
         if (!result.ok) {
             std::string errPageFile = "pages/" + idx + ".webp";
@@ -539,18 +620,43 @@ int main(int argc, char* argv[]) {
                 }
                 queue.markDone(pageIndex);
             } else if (pageIndex != 0 || processedCount == 0) {
-                // Background: thumb only
+                // Background: thumb only — with memory backpressure
+                static constexpr long kBgThumbRssThresholdKb = 320L * 1024; // 320MB
+                static int bgThumbPausedCount = 0;
+                ProcMemorySnapshot memCheck = readProcMemorySnapshot();
+                if (memCheck.vmRssKb > kBgThumbRssThresholdKb) {
+                    bgThumbPausedCount++;
+                    if (bgThumbPausedCount % 50 == 1) {
+                        logDiagnostic("info", "worker", "bg_thumb_paused",
+                            "rss=%.1fMB threshold=%.0fMB pauseCount=%d page=%d",
+                            rssMb(memCheck), kBgThumbRssThresholdKb / 1024.0,
+                            bgThumbPausedCount, pageIndex);
+                    }
+                    // Don't advance — let the allocator reclaim before next attempt
+#ifndef _WIN32
+                    struct pollfd pfd;
+                    pfd.fd = STDIN_FILENO;
+                    pfd.events = POLLIN;
+                    poll(&pfd, 1, 50);  // Brief pause, still responsive to stdin
+#endif
+                    continue;
+                }
+
                 auto thumbStart = std::chrono::steady_clock::now();
                 std::vector<uint8_t> entryData;
                 std::string entryName = backend->entryName(pageIndex);
                 std::string idx = formatIndex(pageIndex);
                 std::string thumbFile = "thumbs/" + idx + ".jpg";
 
+                ProcMemorySnapshot beforeRead = readProcMemorySnapshot();
                 if (!backend->getEntry(pageIndex, entryData) || entryData.empty()) {
                     queue.markThumbOnly(pageIndex);
                     continue;
                 }
+                ProcMemorySnapshot afterRead = readProcMemorySnapshot();
+                logMemoryDeltaIfLarge("bg_entry_read_delta", pageIndex, entryData.size(), beforeRead, afterRead);
                 VipsImage* thumb = nullptr;
+                ProcMemorySnapshot beforeThumb = readProcMemorySnapshot();
                 if (vips_thumbnail_buffer(
                         const_cast<void*>(static_cast<const void*>(entryData.data())),
                         entryData.size(), &thumb, config.thumbWidth,
@@ -560,6 +666,15 @@ int main(int argc, char* argv[]) {
                         "Q", config.thumbQuality, nullptr);
                     g_object_unref(thumb);
                 }
+                ProcMemorySnapshot afterThumb = readProcMemorySnapshot();
+                logMemoryDeltaIfLarge("bg_thumb_delta", pageIndex, entryData.size(), beforeThumb, afterThumb);
+                entryData.clear();
+                entryData.shrink_to_fit();
+#ifndef _WIN32
+                malloc_trim(0);
+#endif
+                ProcMemorySnapshot afterRelease = readProcMemorySnapshot();
+                logMemoryDeltaIfLarge("bg_entry_release_delta", pageIndex, 0, afterThumb, afterRelease);
                 auto thumbEnd = std::chrono::steady_clock::now();
                 totalBackgroundThumbMs += std::chrono::duration<double, std::milli>(thumbEnd - thumbStart).count();
                 backgroundThumbCount++;

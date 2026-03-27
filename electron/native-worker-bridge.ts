@@ -174,6 +174,11 @@ export class NativeWorkerBridge {
           this.focus(fileHash, 0);
         }
 
+        // Invalidate cached manifest when new pages are ready
+        if (event.type === 'ready' || event.type === 'done') {
+          session.manifest = null;
+        }
+
         listener(event);
       } catch {
         // Not JSON — ignore
@@ -187,6 +192,8 @@ export class NativeWorkerBridge {
     });
 
     proc.on('exit', (code) => {
+      rl.close();
+      stderrRl.close();
       if (session.cleanupTimer) {
         clearTimeout(session.cleanupTimer);
         session.cleanupTimer = null;
@@ -263,14 +270,16 @@ export class NativeWorkerBridge {
     }
   }
 
-  /** Read the manifest.json from a session's output directory */
+  /** Read the manifest.json from a session's output directory (cached) */
   readManifest(fileHash: string): any | null {
     const session = this.sessions.get(fileHash);
     if (!session) return null;
+    if (session.manifest) return session.manifest;
 
     const manifestPath = path.join(session.outputDir, 'manifest.json');
     try {
-      return JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+      session.manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+      return session.manifest;
     } catch {
       return null;
     }
