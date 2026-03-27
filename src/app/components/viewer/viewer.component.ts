@@ -8,7 +8,7 @@ import { KeybindingsService } from '../../services/keybindings.service';
 import { ToolbarComponent } from '../toolbar/toolbar.component';
 import { ContextMenuComponent, ContextMenuAction } from '../context-menu/context-menu.component';
 import { ThumbnailsComponent } from '../thumbnails/thumbnails.component';
-import type { RecentFile } from '../../../../shared/models';
+import type { RecentFile, Bookmark } from '../../../../shared/models';
 import type { KeyBinding } from '../../../../shared/keybindings';
 import { APP_METADATA } from '../../../../shared/app-metadata';
 
@@ -115,6 +115,34 @@ interface VerticalPageItem {
               <span class="about-label">Repositorio</span>
               <code class="about-code">{{ appMetadata.repositoryUrl }}</code>
             </div>
+          </div>
+        </div>
+      </div>
+    }
+
+    @if (showBookmarks()) {
+      <div class="viewer-overlay" (click)="showBookmarks.set(false)">
+        <div class="bookmarks-modal" (click)="$event.stopPropagation()">
+          <div class="bookmarks-header">
+            <h2>Marcadores</h2>
+            <button class="bookmarks-close" (click)="showBookmarks.set(false)" title="Cerrar">Cerrar</button>
+          </div>
+          <div class="bookmarks-content">
+            @if (bookmarks().length === 0) {
+              <p class="bookmarks-empty">No hay marcadores para este archivo.</p>
+            } @else {
+              @for (bookmark of bookmarks(); track bookmark.id ?? (bookmark.page + ':' + bookmark.createdAt)) {
+                <div class="bookmark-row">
+                  <button class="bookmark-main" (click)="goToBookmark(bookmark)">
+                    <span class="bookmark-name">{{ bookmark.name }}</span>
+                    <span class="bookmark-page">Página {{ bookmark.page + 1 }}</span>
+                  </button>
+                  <button class="bookmark-delete" (click)="removeBookmark(bookmark, $event)" title="Eliminar marcador">
+                    Eliminar
+                  </button>
+                </div>
+              }
+            }
           </div>
         </div>
       </div>
@@ -550,6 +578,72 @@ interface VerticalPageItem {
       white-space: normal;
       word-break: break-word;
     }
+    .bookmarks-modal {
+      width: min(560px, calc(100vw - 32px));
+      max-height: min(80vh, 680px);
+      overflow: auto;
+      background: #252525;
+      border: 1px solid #444;
+      border-radius: 10px;
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+      color: #ddd;
+    }
+    .bookmarks-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 18px 12px;
+      border-bottom: 1px solid #3a3a3a;
+      h2 { margin: 0; font-size: 1.05rem; font-weight: 600; color: #f0f0f0; }
+    }
+    .bookmarks-close,
+    .bookmark-delete {
+      padding: 6px 12px; background: #333; color: #ddd;
+      border: 1px solid #555; border-radius: 6px; cursor: pointer;
+      &:hover { background: #3d3d3d; }
+    }
+    .bookmarks-content {
+      padding: 14px 18px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .bookmarks-empty {
+      margin: 0;
+      color: #9a9a9a;
+      font-size: 0.95rem;
+    }
+    .bookmark-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px;
+      background: #1e1e1e;
+      border: 1px solid #333;
+      border-radius: 8px;
+    }
+    .bookmark-main {
+      flex: 1;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 0;
+      background: none;
+      border: none;
+      color: #ddd;
+      cursor: pointer;
+      text-align: left;
+    }
+    .bookmark-name {
+      font-size: 0.92rem;
+      color: #ddd;
+    }
+    .bookmark-page {
+      color: #8fa0c4;
+      font-size: 0.86rem;
+      white-space: nowrap;
+    }
     .goto-overlay {
       position: absolute; inset: 0; display: flex; align-items: center;
       justify-content: center; background: rgba(0, 0, 0, 0.5); z-index: 20;
@@ -576,12 +670,14 @@ export class ViewerComponent implements OnInit, OnDestroy {
   showGoToPage = signal(false);
   showShortcuts = signal(false);
   showAbout = signal(false);
+  showBookmarks = signal(false);
   showThumbnails = signal(true);
   isAlwaysOnTop = signal(false);
   isFullscreen = signal(false);
   recentFiles = signal<RecentFile[]>([]);
   pageSource = signal<PageArtifactSource>('optimized');
   shortcuts = signal<KeyBinding[]>([]);
+  bookmarks = signal<Bookmark[]>([]);
   private verticalRenderVersion = signal(0);
   readonly appMetadata = APP_METADATA;
   shortcutSections = computed<ShortcutSection[]>(() => {
@@ -848,6 +944,9 @@ export class ViewerComponent implements OnInit, OnDestroy {
       case 'about':
         this.showAbout.set(true);
         return;
+      case 'goto-bookmark':
+        void this.openBookmarks();
+        return;
     }
 
     const actionMap: Record<string, string> = {
@@ -869,6 +968,30 @@ export class ViewerComponent implements OnInit, OnDestroy {
       name: `Página ${this.currentPageIndex() + 1}`,
       createdAt: new Date().toISOString(),
     });
+    if (this.showBookmarks()) {
+      await this.loadBookmarks(state.fileHash);
+    }
+  }
+
+  async openBookmarks(): Promise<void> {
+    const state = this.fileState();
+    if (!state) return;
+    await this.loadBookmarks(state.fileHash);
+    this.showBookmarks.set(true);
+  }
+
+  async goToBookmark(bookmark: Bookmark): Promise<void> {
+    this.showBookmarks.set(false);
+    this.goToPage(bookmark.page);
+  }
+
+  async removeBookmark(bookmark: Bookmark, event?: Event): Promise<void> {
+    event?.stopPropagation();
+    if (bookmark.id == null) return;
+    await this.electron.removeBookmark(bookmark.id);
+    const state = this.fileState();
+    if (!state) return;
+    await this.loadBookmarks(state.fileHash);
   }
 
   // --- Keyboard ---
@@ -882,6 +1005,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
     }
     if (event.key === 'Escape') {
       if (this.showAbout()) { this.showAbout.set(false); return; }
+      if (this.showBookmarks()) { this.showBookmarks.set(false); return; }
       if (this.showShortcuts()) { this.showShortcuts.set(false); return; }
       if (this.showGoToPage()) { this.showGoToPage.set(false); return; }
       if (this.showThumbnails()) { this.showThumbnails.set(false); return; }
@@ -1304,6 +1428,14 @@ export class ViewerComponent implements OnInit, OnDestroy {
 
   private async loadRecentFiles(): Promise<void> {
     try { this.recentFiles.set(await this.electron.getRecentFiles()); } catch { /* ignore */ }
+  }
+
+  private async loadBookmarks(fileHash: string): Promise<void> {
+    try {
+      this.bookmarks.set(await this.electron.getBookmarks(fileHash));
+    } catch {
+      this.bookmarks.set([]);
+    }
   }
 
   private extractDroppedPath(event: DragEvent): string | null {

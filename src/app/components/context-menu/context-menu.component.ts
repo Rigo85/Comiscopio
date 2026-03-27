@@ -215,6 +215,7 @@ export class ContextMenuComponent {
       items.push({ label: 'Ver optimizada', action: { type: 'page-source', value: 'optimized' }, active: this.pageSource() === 'optimized' });
       items.push({ label: 'Ver original', action: { type: 'page-source', value: 'original' }, active: this.pageSource() === 'original' });
       items.push({ label: 'Agregar marcador', action: { type: 'add-bookmark' } });
+      items.push({ label: 'Ver marcadores...', action: { type: 'goto-bookmark' } });
       items.push({ label: 'Miniaturas', action: { type: 'thumbnails' }, active: this.showThumbnails() });
       items.push({ label: 'Resetear filtros', action: { type: 'reset-filters' } });
 
