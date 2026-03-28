@@ -70,11 +70,13 @@ bool MuPdfRenderer::renderPage(int pageIndex, int maxDim,
             fz_throw(ctx, FZ_ERROR_GENERIC, "invalid page dimensions");
         }
 
-        // Calculate scale so the largest side fits maxDim
+        // Scale so the largest side fits maxDim.
+        // No upscaling cap here: MuPDF renders vector content (PDF/EPUB/XPS/DjVu)
+        // whose native unit is points (1/72"), not screen pixels — scaling up is
+        // exactly what produces a crisp screen image (e.g. A4 = 595×842 pts → 2.85×
+        // at maxDim=2400 gives ~205 DPI, vs. just 72 DPI at scale=1).
         float maxSide = std::max(pageW, pageH);
         float scale = static_cast<float>(maxDim) / maxSide;
-        // Don't upscale small pages
-        if (scale > 1.0f) scale = 1.0f;
 
         fz_matrix matrix = fz_scale(scale, scale);
         fz_colorspace* cs = fz_device_rgb(ctx);

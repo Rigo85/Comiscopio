@@ -1550,6 +1550,11 @@ export class ViewerComponent implements OnInit, OnDestroy {
     if (this.previewInitializedHash === fileHash) return;
 
     const settings = await this.electron.getSettings();
+    // Re-check after the await: completeOpen() clears openingFileHash synchronously at its
+    // very start (before its own first await).  If it already started, the full-open cache
+    // state is either set or about to be set — clobbering it with a 1-page init would break
+    // navigation for the rest of the session.
+    if (this.openingFileHash !== fileHash) return;
     this.readerState.applySettings(settings);
     this.pageCache.init(fileHash, Math.max(pageIndex + 1, 1), settings.slidingWindowSize, settings.slidingWindowSize);
     this.thumbnailCache.init(fileHash);

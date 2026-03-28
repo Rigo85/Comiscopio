@@ -29,8 +29,8 @@
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
-static constexpr double kSlowPageLogThresholdMs = 150.0;
-static constexpr double kVerySlowPageLogThresholdMs = 300.0;
+static constexpr double kSlowPageLogThresholdMs = 350.0;
+static constexpr double kVerySlowPageLogThresholdMs = 700.0;
 
 // ---- Logging (same format as archive worker) ----
 
