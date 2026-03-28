@@ -564,6 +564,17 @@ int main(int argc, char* argv[]) {
         json("extract_raw").dump().c_str(), totalEntries, extractMs, totalEntries > 0 ? extractMs / totalEntries : 0);
     logWorkerMemory("after-extraction");
 
+    if (totalEntries == 0) {
+        json err;
+        err["type"] = "error";
+        err["message"] = "No image entries found in archive";
+        fprintf(stdout, "%s\n", err.dump().c_str());
+        fflush(stdout);
+        logDiagnostic("error", "worker", "archive_empty", "input=%s", json(args.input).dump().c_str());
+        vips_shutdown();
+        return 1;
+    }
+
     int processedCount = previewProcessed ? 1 : 0;
 
     // Work queue

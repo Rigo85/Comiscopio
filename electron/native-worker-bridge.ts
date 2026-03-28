@@ -193,6 +193,15 @@ export class NativeWorkerBridge {
 
         if (event.type === 'archive') {
           session.totalPages = event.totalPages || 0;
+
+          if (session.totalPages === 0) {
+            // Archive opened successfully but contains no recognized image entries
+            // (e.g. a TAR of CBR files). Rewrite as an error so the viewer shows
+            // a clear message instead of an empty reader.
+            listener({ type: 'error', message: 'El archivo no contiene imágenes reconocidas' });
+            return;
+          }
+
           session.ready = true;
 
           // Auto-focus page 0 so the first page is ready before renderer asks
