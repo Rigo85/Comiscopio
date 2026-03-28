@@ -12,11 +12,14 @@
   "main": "dist-electron/electron/main.js",
   "scripts": {
     "ng": "ng",
-    "start": "npm-run-all build:worker start:dev",
+    "start": "npm-run-all build:worker build:doc-worker start:dev",
     "start:dev": "run-p --race start:angular watch:electron start:electron",
     "start:angular": "ng serve --port 4200",
     "start:electron": "wait-on http://localhost:4200 dist-electron/electron/main.js && electron --no-sandbox .",
     "build:worker": "cmake -B native/worker/build -S native/worker -DCMAKE_BUILD_TYPE=Release && cmake --build native/worker/build -j\"$(nproc)\"",
+    "build:doc-worker": "cmake -B native/doc-worker/build -S native/doc-worker -DCMAKE_BUILD_TYPE=Release && cmake --build native/doc-worker/build -j\"$(nproc)\"",
+    "build:native-linux": "bash native/deps/build-linux-x64.sh",
+    "full:package-linux": "npm run build:native-linux && npm run dist:linux",
     "build": "npm-run-all build:angular build:electron",
     "build:angular": "ng build --configuration production --base-href ./",
     "build:electron": "tsc -p tsconfig.electron.json",
@@ -97,6 +100,24 @@
         "name": "PDF Document",
         "mimeType": "application/pdf",
         "role": "Viewer"
+      },
+      {
+        "ext": ["djvu", "djv"],
+        "name": "DjVu Document",
+        "mimeType": "image/vnd.djvu",
+        "role": "Viewer"
+      },
+      {
+        "ext": "epub",
+        "name": "EPUB Document",
+        "mimeType": "application/epub+zip",
+        "role": "Viewer"
+      },
+      {
+        "ext": "xps",
+        "name": "XPS Document",
+        "mimeType": "application/vnd.ms-xpsdocument",
+        "role": "Viewer"
       }
     ],
     "linux": {
@@ -125,7 +146,16 @@
         "application/x-cbz",
         "application/x-cbr",
         "application/x-cb7",
-        "application/pdf"
+        "application/pdf",
+        "image/vnd.djvu",
+        "application/epub+zip",
+        "application/vnd.ms-xpsdocument"
+      ],
+      "extraResources": [
+        {
+          "from": "native/vendor/linux-x64",
+          "to": "native"
+        }
       ]
     },
     "win": {

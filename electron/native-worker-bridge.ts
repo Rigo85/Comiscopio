@@ -40,29 +40,46 @@ type ArtifactVariant = 'optimized' | 'original';
 export class NativeWorkerBridge {
   private sessions = new Map<string, WorkerSession>();
 
-  /** Get path to the native worker binary */
+  /** Check if a file is a document format (PDF, DjVu, EPUB, XPS) vs archive */
+  private isDocumentFormat(filePath: string): boolean {
+    const ext = path.extname(filePath).toLowerCase();
+    return ['.pdf', '.djvu', '.djv', '.epub', '.xps'].includes(ext);
+  }
+
+  /** Get path to the archive worker binary */
   private getWorkerBinaryPath(): string {
-    const executable = process.platform === 'win32' ? 'comiscopio-worker.exe' : 'comiscopio-worker';
+    return this.findBinary('comiscopio-worker', 'worker');
+  }
+
+  /** Get path to the document worker binary */
+  private getDocWorkerBinaryPath(): string {
+    return this.findBinary('comiscopio-doc-worker', 'doc-worker');
+  }
+
+  private findBinary(name: string, buildDir: string): string {
+    const executable = process.platform === 'win32' ? `${name}.exe` : name;
     if (app.isPackaged) {
-      // In packaged app: look in extraResources or alongside the app
+      // Packaged layout: resources/native/bin/<binary>  (RPATH → ../lib)
       const candidates = [
-        path.join(process.resourcesPath, 'native', executable),
-        path.join(path.dirname(app.getPath('exe')), 'native', executable),
+        path.join(process.resourcesPath, 'native', 'bin', executable),
+        path.join(path.dirname(app.getPath('exe')), 'native', 'bin', executable),
       ];
       for (const p of candidates) {
         if (fs.existsSync(p)) return p;
       }
     }
-    // Dev mode: build directory
+    // Dev mode: vendor release build first, then local cmake build dirs
+    const vendorPlatform = `${process.platform}-${process.arch}`;
     const devCandidates = [
-      path.join(__dirname, '..', '..', 'native', 'worker', 'build', executable),
-      path.join(__dirname, '..', '..', 'native', 'worker', 'build-debug', executable),
+      path.join(__dirname, '..', '..', 'native', 'vendor', vendorPlatform, 'bin', executable),
+      path.join(__dirname, '..', '..', 'native', buildDir, 'build', executable),
+      path.join(__dirname, '..', '..', 'native', buildDir, 'build-debug', executable),
     ];
     for (const p of devCandidates) {
       if (fs.existsSync(p)) return p;
     }
 
-    throw new Error('comiscopio-worker binary not found');
+    throw new Error(`${name} binary not found`);
   }
 
   private getWorkerEnv(binaryPath: string): NodeJS.ProcessEnv {
@@ -70,11 +87,14 @@ export class NativeWorkerBridge {
     const libDirs = new Set<string>();
 
     if (app.isPackaged) {
+      // Packaged: RPATH handles lib resolution, but also set env as fallback
       libDirs.add(path.join(process.resourcesPath, 'native', 'lib'));
       libDirs.add(path.join(path.dirname(app.getPath('exe')), 'native', 'lib'));
     } else {
+      // Dev: vendor release libs, then sibling lib/ next to binary
+      const vendorPlatform = `${process.platform}-${process.arch}`;
+      libDirs.add(path.join(__dirname, '..', '..', 'native', 'vendor', vendorPlatform, 'lib'));
       libDirs.add(path.join(path.dirname(binaryPath), 'lib'));
-      libDirs.add(path.join(__dirname, '..', '..', 'native', 'worker', 'vendor', process.platform, process.arch, 'lib'));
     }
 
     const existing = (() => {
@@ -134,14 +154,13 @@ export class NativeWorkerBridge {
 
     this.sessions.set(fileHash, session);
 
-    const binaryPath = this.getWorkerBinaryPath();
-    const backend = options.backend || this.detectBackend(filePath);
+    const isDoc = this.isDocumentFormat(filePath);
+    const binaryPath = isDoc ? this.getDocWorkerBinaryPath() : this.getWorkerBinaryPath();
     const readerFormat = options.readerFormat || (process.env.COMISCOPIO_READER_FORMAT === 'webp' ? 'webp' : 'jpeg');
 
     const args = [
       '--input', filePath,
       '--output', outputDir,
-      '--backend', backend,
       '--reader-format', readerFormat,
       '--thumb-width', String(options.thumbWidth || 180),
       '--thumb-quality', String(options.thumbQuality || 60),
@@ -151,6 +170,12 @@ export class NativeWorkerBridge {
       '--window-before', String(options.windowBefore || 2),
       '--window-after', String(options.windowAfter || 3),
     ];
+
+    // Archive worker needs --backend; doc worker auto-detects format
+    if (!isDoc) {
+      const backend = options.backend || this.detectBackend(filePath);
+      args.push('--backend', backend);
+    }
 
     const proc = spawn(binaryPath, args, {
       stdio: ['pipe', 'pipe', 'pipe'],

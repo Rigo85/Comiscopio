@@ -13,6 +13,27 @@ pkg_check_modules(ARCHIVE REQUIRED IMPORTED_TARGET libarchive)
 # Find nlohmann/json
 find_package(nlohmann_json REQUIRED)
 
+# libunrar — static in release builds (USE_STATIC_DEPS=ON), dynamic in dev
+option(USE_STATIC_DEPS "Link small deps statically (set by Docker release build)" OFF)
+
+if(USE_STATIC_DEPS)
+    if(CMAKE_LIBRARY_ARCHITECTURE)
+        set(_STATIC_PATHS "/usr/lib/${CMAKE_LIBRARY_ARCHITECTURE}")
+    else()
+        set(_STATIC_PATHS "/usr/lib")
+    endif()
+    set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
+    find_library(UNRAR_LIB unrar PATHS ${_STATIC_PATHS} REQUIRED)
+    set(CMAKE_FIND_LIBRARY_SUFFIXES ".so;.a")
+    if(NOT UNRAR_LIB)
+        message(FATAL_ERROR "libunrar.a not found — install: sudo apt install libunrar-dev")
+    endif()
+    message(STATUS "libunrar: static ${UNRAR_LIB}")
+else()
+    find_library(UNRAR_LIB unrar REQUIRED)
+    message(STATUS "libunrar: dynamic ${UNRAR_LIB}")
+endif()
+
 # Sources
 set(SOURCES
     src/app/main.cpp
@@ -39,7 +60,7 @@ target_link_libraries(comiscopio-worker PRIVATE
     PkgConfig::VIPS
     PkgConfig::ARCHIVE
     nlohmann_json::nlohmann_json
-    unrar
+    ${UNRAR_LIB}
 )
 
 # Install target

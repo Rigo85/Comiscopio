@@ -1,0 +1,34 @@
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Enable universe + multiverse repos (libmupdf-dev is in universe, libunrar-dev in multiverse)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends software-properties-common ca-certificates && \
+    add-apt-repository universe && \
+    add-apt-repository multiverse && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        # Build tools
+        build-essential \
+        cmake \
+        pkg-config \
+        patchelf \
+        # Dynamic deps — bundled at package time via ldd
+        libvips-dev \
+        libarchive-dev \
+        # Static deps — linked directly into binaries
+        libunrar-dev \
+        libmupdf-dev \
+        libjbig2dec0-dev \
+        libgumbo-dev \
+        libmujs-dev \
+        # MuPDF transitive dynamic deps (bundled via ldd)
+        libfreetype-dev \
+        libharfbuzz-dev \
+        libopenjp2-7-dev \
+        libjpeg-dev \
+        zlib1g-dev \
+        # nlohmann/json (header-only)
+        nlohmann-json3-dev \
+    && rm -rf /var/lib/apt/lists/*

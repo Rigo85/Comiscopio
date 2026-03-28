@@ -8,6 +8,8 @@
 /bazel-out
 /release
 /native/worker/build*/
+/native/doc-worker/build*/
+/native/vendor/
 
 # Node
 /node_modules
@@ -54,3 +56,7 @@ todo.md
 propuesta-cambio.md
 revision-memoria.md
 todo-codex.md
+otros-backends.md
+todo*.md
+ejecucion-mupdf.md
+

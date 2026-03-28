@@ -18,13 +18,17 @@ export const ARCHIVE_EXTENSIONS: Record<string, string> = {
   '.tar': 'cbt',
   '.tgz': 'cbt',
   '.pdf': 'pdf',
+  '.djvu': 'djvu',
+  '.djv': 'djvu',
+  '.epub': 'epub',
+  '.xps': 'xps',
 };
 
 /** File dialog filters */
 export const FILE_FILTERS = [
   {
     name: 'Comics',
-    extensions: ['cbz', 'cbr', 'cb7', 'cbt', 'zip', 'rar', '7z', 'tar', 'tgz', 'pdf'],
+    extensions: ['cbz', 'cbr', 'cb7', 'cbt', 'zip', 'rar', '7z', 'tar', 'tgz', 'pdf', 'djvu', 'djv', 'epub', 'xps'],
   },
   {
     name: 'All Files',
