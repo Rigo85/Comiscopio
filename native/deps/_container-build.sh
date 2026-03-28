@@ -8,6 +8,13 @@ VENDOR="$NATIVE/vendor/linux-x64"
 
 mkdir -p "$VENDOR/bin"
 
+# Always start from a clean release build to avoid stale CMake cache issues
+rm -rf "$NATIVE/worker/build-release"
+rm -rf "$NATIVE/doc-worker/build-release"
+# Remove any accidental in-source CMake artifacts
+rm -f "$NATIVE/worker/CMakeCache.txt"   "$NATIVE/doc-worker/CMakeCache.txt"
+rm -rf "$NATIVE/worker/CMakeFiles"      "$NATIVE/doc-worker/CMakeFiles"
+
 echo "==================================================================="
 echo " Building comiscopio-worker  (archive: CBZ/CBR/CB7/TAR)"
 echo "==================================================================="

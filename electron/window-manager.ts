@@ -1,4 +1,5 @@
-import { BrowserWindow, screen } from 'electron';
+import { BrowserWindow, screen, app } from 'electron';
+import * as path from 'path';
 import { APP_NAME } from '../shared/constants';
 import { IpcChannels } from '../shared/ipc-channels';
 
@@ -26,6 +27,10 @@ export class WindowManager {
   createWindow(fileHash?: string): BrowserWindow {
     const bounds = this.getInitialBounds();
 
+    const iconPath = app.isPackaged
+      ? path.join(process.resourcesPath, 'icon.png')
+      : path.join(app.getAppPath(), 'resources', 'icon.png');
+
     const win = new BrowserWindow({
       ...bounds,
       minWidth: 400,
@@ -33,6 +38,7 @@ export class WindowManager {
       frame: false,
       titleBarStyle: 'hidden',
       title: APP_NAME,
+      icon: iconPath,
       backgroundColor: '#1a1a1a',
       show: false,
       webPreferences: {

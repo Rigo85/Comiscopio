@@ -1,1 +1,1 @@
-/media/work/OneDrive/Personal-Git/Comiscopio/native/worker/src/image/placeholder.cpp
+../../../worker/src/image/placeholder.cpp

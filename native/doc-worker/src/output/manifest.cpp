@@ -1,1 +1,1 @@
-/media/work/OneDrive/Personal-Git/Comiscopio/native/worker/src/output/manifest.cpp
+../../../worker/src/output/manifest.cpp

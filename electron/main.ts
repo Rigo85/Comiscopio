@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as util from 'util';
+import { execFile } from 'child_process';
 import { Readable } from 'stream';
 import { WindowManager } from './window-manager';
 import { NativeWorkerBridge } from './native-worker-bridge';
@@ -540,9 +541,63 @@ function getFileFromArgs(argv: string[]): string | null {
   return null;
 }
 
+// Install a .desktop file + icon on first run (or when the AppImage path changes).
+// Only runs when launched as an AppImage on Linux — process.env.APPIMAGE is set by
+// the AppImage runtime and contains the absolute path to the .AppImage file.
+function installDesktopIntegration(): void {
+  if (process.platform !== 'linux' || !process.env.APPIMAGE) return;
+
+  const appImagePath = process.env.APPIMAGE;
+  const storedPath = database.settingsRepo.get('desktopIntegrationAppImage');
+  if (storedPath === appImagePath) return; // already up-to-date
+
+  const home = os.homedir();
+  const appsDir = path.join(home, '.local', 'share', 'applications');
+  const iconDir = path.join(home, '.local', 'share', 'icons', 'hicolor', '1024x1024', 'apps');
+  const iconDest = path.join(iconDir, 'comiscopio.png');
+  const desktopDest = path.join(appsDir, 'comiscopio.desktop');
+
+  try {
+    // Copy icon to standard hicolor theme location
+    const iconSrc = path.join(process.resourcesPath, 'icon.png');
+    fs.mkdirSync(iconDir, { recursive: true });
+    fs.copyFileSync(iconSrc, iconDest);
+
+    // Write .desktop file — use absolute icon path to bypass icon theme cache issues
+    fs.mkdirSync(appsDir, { recursive: true });
+    const desktop = [
+      '[Desktop Entry]',
+      'Name=Comiscopio',
+      'Comment=Visor de cómics y manga',
+      `Exec=${appImagePath} %U`,
+      `Icon=${iconDest}`,
+      'Type=Application',
+      'Categories=Graphics;Viewer;',
+      'MimeType=application/x-cbz;application/x-cbr;application/x-cb7;application/x-cbt;application/pdf;image/vnd.djvu;application/epub+zip;application/vnd.ms-xpsdocument;',
+      'StartupWMClass=Comiscopio',
+      'Terminal=false',
+      '',
+    ].join('\n');
+    fs.writeFileSync(desktopDest, desktop, { mode: 0o755 });
+
+    // Mark as trusted so GNOME does not prompt for authorization
+    execFile('gio', ['set', desktopDest, 'metadata::trusted', 'true'], () => { /* ignore errors */ });
+
+    // Refresh desktop database and icon cache
+    execFile('update-desktop-database', [appsDir], () => { /* ignore errors */ });
+    execFile('gtk-update-icon-cache', ['-f', '-t', path.join(home, '.local', 'share', 'icons', 'hicolor')], () => { /* ignore errors */ });
+
+    database.settingsRepo.set('desktopIntegrationAppImage', appImagePath);
+  } catch (err) {
+    // Non-fatal: log but do not crash
+    console.error('[desktop-integration] failed:', err);
+  }
+}
+
 app.whenReady().then(async () => {
   installFileLogger();
   await initialize();
+  installDesktopIntegration();
   registerProtocolHandlers();
   setupIpcHandlers();
 

@@ -54,7 +54,18 @@ Visor de cómics y manga para escritorio. Soporta archivos comprimidos (CBZ, CBR
 
 ### Ejecutar la aplicación (AppImage)
 
-El AppImage de Linux es autocontenido y no requiere dependencias del sistema.
+El AppImage es autocontenido (workers nativos y todas sus dependencias incluidas), pero requiere FUSE para montarse:
+
+```bash
+sudo apt install libfuse2   # Ubuntu 22.04+ / Debian 12+
+```
+
+Como alternativa sin FUSE, descarga el `tar.gz`, extrae y ejecuta el binario directamente:
+
+```bash
+tar -xzf comiscopio-0.1.0.tar.gz
+./comiscopio-0.1.0/comiscopio
+```
 
 ### Compilar desde código fuente
 

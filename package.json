@@ -70,6 +70,7 @@
   "build": {
     "appId": "com.comiscopio.app",
     "productName": "Comiscopio",
+    "afterPack": "scripts/after-pack.js",
     "directories": {
       "output": "release"
     },
@@ -85,14 +86,31 @@
     },
     "fileAssociations": [
       {
-        "ext": [
-          "cbz",
-          "cbr",
-          "cb7"
-        ],
+        "ext": "cbz",
         "name": "Comic Archive",
         "description": "Comic/Manga archive",
         "mimeType": "application/x-cbz",
+        "role": "Viewer"
+      },
+      {
+        "ext": "cbr",
+        "name": "Comic Archive",
+        "description": "Comic/Manga archive",
+        "mimeType": "application/x-cbr",
+        "role": "Viewer"
+      },
+      {
+        "ext": "cb7",
+        "name": "Comic Archive",
+        "description": "Comic/Manga archive",
+        "mimeType": "application/x-cb7",
+        "role": "Viewer"
+      },
+      {
+        "ext": "cbt",
+        "name": "Comic Archive",
+        "description": "Comic/Manga archive",
+        "mimeType": "application/x-cbt",
         "role": "Viewer"
       },
       {
@@ -102,7 +120,13 @@
         "role": "Viewer"
       },
       {
-        "ext": ["djvu", "djv"],
+        "ext": "djvu",
+        "name": "DjVu Document",
+        "mimeType": "image/vnd.djvu",
+        "role": "Viewer"
+      },
+      {
+        "ext": "djv",
         "name": "DjVu Document",
         "mimeType": "image/vnd.djvu",
         "role": "Viewer"
@@ -155,6 +179,10 @@
         {
           "from": "native/vendor/linux-x64",
           "to": "native"
+        },
+        {
+          "from": "resources/icon-1024.png",
+          "to": "icon.png"
         }
       ]
     },

@@ -1,1 +1,1 @@
-/media/work/OneDrive/Personal-Git/Comiscopio/native/worker/src/image/image_pipeline.cpp
+../../../worker/src/image/image_pipeline.cpp
