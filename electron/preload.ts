@@ -9,6 +9,7 @@ const validInvokeChannels = new Set([
   IpcChannels.SAVE_PROGRESS,
   IpcChannels.GET_PROGRESS,
   IpcChannels.GET_RECENT_FILES,
+  IpcChannels.REMOVE_RECENT_FILE,
   IpcChannels.GET_SETTINGS,
   IpcChannels.SAVE_SETTINGS,
   IpcChannels.CLEANUP_TEMP,

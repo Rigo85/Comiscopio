@@ -41,6 +41,10 @@ export class ReadingProgressRepo {
     };
   }
 
+  removeByFilePath(filePath: string): void {
+    this.db.prepare('DELETE FROM reading_progress WHERE file_path = ?').run(filePath);
+  }
+
   getRecent(limit: number): RecentFile[] {
     const rows = this.db
       .prepare('SELECT * FROM reading_progress ORDER BY last_read DESC LIMIT ?')

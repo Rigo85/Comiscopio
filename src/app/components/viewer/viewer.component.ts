@@ -864,7 +864,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
       case 'error':
         if (this.loading()) {
           this.loading.set(false);
-          this.error.set(event.message || 'Error del worker');
+          this.error.set(humanizeWorkerError(event.message));
           this.openingFileHash = null;
           this.openingSessionId = null;
           this.resetViewerState();
@@ -1248,7 +1248,14 @@ export class ViewerComponent implements OnInit, OnDestroy {
       // Otherwise, wait for "archive" event from worker
     } catch (err: any) {
       this.loading.set(false);
-      this.error.set(err.message || 'Error al abrir el archivo');
+      if (err.message?.includes('FILE_NOT_FOUND')) {
+        const name = filePath.split(/[\\/]/).pop() ?? filePath;
+        this.error.set(`No se encontró "${name}".\n\nEs posible que haya sido movido, renombrado o eliminado.`);
+        this.electron.removeRecentFile(filePath).catch(() => {});
+        this.loadRecentFiles();
+      } else {
+        this.error.set(err.message || 'Error al abrir el archivo');
+      }
       this.fileState.set(null);
       this.openingFileHash = null;
       this.openingSessionId = null;
@@ -1810,4 +1817,13 @@ export class ViewerComponent implements OnInit, OnDestroy {
       ...extra,
     });
   }
+}
+
+function humanizeWorkerError(message: string | undefined): string {
+  if (!message) return 'No se pudo abrir el archivo.';
+  if (message === 'El archivo no contiene imágenes reconocidas') return message;
+  if (message.startsWith('Worker exited with code')) {
+    return 'No se pudo abrir el archivo. El formato puede no ser compatible o el archivo está dañado.';
+  }
+  return message;
 }

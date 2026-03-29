@@ -349,7 +349,17 @@ function setupIpcHandlers(): void {
     const sessionId = require('crypto').randomUUID();
 
     // Compute file hash for session key
-    const stat = fs.statSync(filePath);
+    let stat: ReturnType<typeof fs.statSync>;
+    try {
+      stat = fs.statSync(filePath);
+    } catch (e: any) {
+      if (e.code === 'ENOENT') {
+        const err = new Error('FILE_NOT_FOUND') as any;
+        err.filePath = filePath;
+        throw err;
+      }
+      throw e;
+    }
     const crypto = require('crypto');
     const data = `${filePath}|${stat.size}|${stat.mtimeMs}`;
     const fileHash = crypto.createHash('sha256').update(data).digest('hex').substring(0, 16);
@@ -437,6 +447,10 @@ function setupIpcHandlers(): void {
 
   ipcMain.handle(IpcChannels.GET_RECENT_FILES, async () => {
     return database.readingProgressRepo.getRecent(20);
+  });
+
+  ipcMain.handle(IpcChannels.REMOVE_RECENT_FILE, async (_event, filePath: string) => {
+    database.readingProgressRepo.removeByFilePath(filePath);
   });
 
   // --- Settings ---

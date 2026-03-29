@@ -71,6 +71,10 @@ export class ElectronService {
     return (await this.api.invoke(IpcChannels.GET_RECENT_FILES)) as RecentFile[];
   }
 
+  async removeRecentFile(filePath: string): Promise<void> {
+    await this.api.invoke(IpcChannels.REMOVE_RECENT_FILE, filePath);
+  }
+
   // --- Bookmarks ---
 
   async addBookmark(bookmark: Bookmark): Promise<void> {
