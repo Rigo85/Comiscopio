@@ -9,7 +9,30 @@ permissions:
   contents: write
 
 jobs:
+  # ── 1. Unit tests ────────────────────────────────────────────────────────────
+  # Fast: vitest only, no workers needed.
+  test-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        run: npm test
+
+  # ── 2. Build Linux ───────────────────────────────────────────────────────────
+  # Blocked by unit tests. Produces two artifacts:
+  #   linux-builds  — AppImage + tar.gz  (for the release job)
+  #   linux-native  — native workers only (for the functional test job)
   build-linux:
+    needs: [test-unit]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,48 +55,51 @@ jobs:
         run: npm run build
 
       - name: Package Linux
-        run: npx electron-builder --linux
+        run: NODE_NO_WARNINGS=1 npx electron-builder --linux
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload artifacts
+      - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
           name: linux-builds
           path: release/*.{AppImage,tar.gz}
 
-  # ---------------------------------------------------------------------------
-  # Windows build — pending native worker support for Win32
-  # ---------------------------------------------------------------------------
-  # build-windows:
-  #   runs-on: windows-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #
-  #     - name: Setup Node.js
-  #       uses: actions/setup-node@v4
-  #       with:
-  #         node-version: 24
-  #
-  #     - name: Install dependencies
-  #       run: npm ci
-  #
-  #     - name: Build
-  #       run: npm run build
-  #
-  #     - name: Package Windows
-  #       run: npx electron-builder --win
-  #       env:
-  #         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  #
-  #     - name: Upload artifacts
-  #       uses: actions/upload-artifact@v4
-  #       with:
-  #         name: windows-builds
-  #         path: release/*.{exe,zip}
+      - name: Upload native workers (for functional tests)
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-native
+          path: release/linux-unpacked/resources/native/
 
-  release:
+  # ── 3. Functional tests ──────────────────────────────────────────────────────
+  # Runs the worker test suite directly on the ubuntu-latest runner using the
+  # exact workers that will be shipped. No Docker matrix here — that is for
+  # local pre-release validation across distros (npm run test:functional).
+  test-functional:
     needs: [build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download native workers
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-native
+          path: ci-native/
+
+      - name: Mark worker binaries executable
+        run: chmod +x ci-native/bin/*
+
+      - name: Run functional tests
+        run: |
+          bash test/workers/run-worker-tests.sh \
+            --native-dir ci-native \
+            --fixtures-dir test/fixtures
+
+  # ── 4. Release ───────────────────────────────────────────────────────────────
+  # Only runs when both test jobs and the build pass.
+  release:
+    needs: [test-functional]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -93,3 +119,34 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ---------------------------------------------------------------------------
+  # Windows build — pending native worker support for Win32
+  # ---------------------------------------------------------------------------
+  # build-windows:
+  #   needs: [test-unit]
+  #   runs-on: windows-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #
+  #     - name: Setup Node.js
+  #       uses: actions/setup-node@v4
+  #       with:
+  #         node-version: 24
+  #
+  #     - name: Install dependencies
+  #       run: npm ci
+  #
+  #     - name: Build
+  #       run: npm run build
+  #
+  #     - name: Package Windows
+  #       run: NODE_NO_WARNINGS=1 npx electron-builder --win
+  #       env:
+  #         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  #
+  #     - name: Upload artifacts
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: windows-builds
+  #         path: release/*.{exe,zip}
