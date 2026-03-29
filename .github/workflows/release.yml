@@ -24,6 +24,9 @@ jobs:
         with:
           node-version: 24
 
+      - name: Enable corepack (pins npm to version in packageManager field)
+        run: corepack enable
+
       - name: Install dependencies
         run: npm ci
 
@@ -44,6 +47,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 24
+
+      - name: Enable corepack (pins npm to version in packageManager field)
+        run: corepack enable
 
       - name: Install dependencies
         run: npm ci
