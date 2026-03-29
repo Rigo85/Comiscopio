@@ -172,22 +172,20 @@ Salida esperada:
 ```
   Image                           Result  Time
   ──────────────────────────────────────────────────
-  ubuntu:20.04                    PASS    43s
   ubuntu:22.04                    PASS    41s
   ubuntu:24.04                    PASS    39s
-  debian:11                       PASS    47s
   debian:12                       PASS    44s
   debian:13                       PASS    46s
   fedora:40                       PASS    52s
   fedora:41                       PASS    50s
   fedora:42                       PASS    49s
-  opensuse/leap:15.4              PASS    55s
-  opensuse/leap:15.5              PASS    53s
   opensuse/leap:15.6              PASS    51s
   opensuse/tumbleweed             PASS    54s
   ──────────────────────────────────────────────────
-  PASS: 13   FAIL: 0   SKIP: 0
+  PASS: 9   FAIL: 0   SKIP: 0
 ```
+
+> Distros excluidas (glibc < 2.33): ubuntu:20.04, debian:11, opensuse/leap:15.4, opensuse/leap:15.5.
 
 Para agregar o quitar distros, editar `test/workers/distros.txt`.
 

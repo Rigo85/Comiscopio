@@ -182,7 +182,7 @@ describe('handleWorkerEvent: error', () => {
 
     dispatch(viewer, { type: 'error', fileHash: 'h' });
 
-    expect(viewer.error()).toBe('Error del worker');
+    expect(viewer.error()).toBe('No se pudo abrir el archivo.');
   });
 
   it('clears openingFileHash and openingSessionId on error', () => {
