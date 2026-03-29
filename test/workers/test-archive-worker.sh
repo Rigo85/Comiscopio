@@ -316,17 +316,24 @@ run_worker_until_exit() {
 echo ""
 echo "--- empty_cbz (no images) ---"
 {
-    # Worker emits archive event with totalPages:0 for empty archives.
-    # The bridge (TypeScript) converts this to an error — not the worker itself.
+    # Worker emits {"type":"error"} directly when no image entries are found.
     log_dir=$(run_worker_until_exit "empty_cbz" "$FIXTURES_DIR/test-empty.cbz" "zip")
-    assert_event "empty_cbz: archive event with 0 pages" "$log_dir/stdout.log" "archive" "totalPages" "0"
+    if grep -q '"type":"error"' "$log_dir/stdout.log" 2>/dev/null; then
+        pass "empty_cbz: error event for empty archive"
+    else
+        fail "empty_cbz: expected error event in $log_dir/stdout.log"
+    fi
 }
 
 echo ""
 echo "--- not_images_tar (TAR of CBRs) ---"
 {
     log_dir=$(run_worker_until_exit "not_images_tar" "$FIXTURES_DIR/test-not-images.tar" "tar")
-    assert_event "not_images_tar: archive event with 0 pages" "$log_dir/stdout.log" "archive" "totalPages" "0"
+    if grep -q '"type":"error"' "$log_dir/stdout.log" 2>/dev/null; then
+        pass "not_images_tar: error event for non-image archive"
+    else
+        fail "not_images_tar: expected error event in $log_dir/stdout.log"
+    fi
 }
 
 # ── TEST: focus / ready protocol ─────────────────────────────────────────────
