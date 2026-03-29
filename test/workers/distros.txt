@@ -1,0 +1,28 @@
+# Distros to run functional tests against.
+# One Docker image per line — must match the exact image name used by Docker Hub.
+# Lines starting with # and blank lines are ignored.
+#
+# To add a distro: just append a line.
+# To disable one temporarily: prefix it with #.
+#
+# Validation: the script checks each image against the local Docker cache first.
+# Use --pull to automatically pull missing images before running.
+
+# Debian/Ubuntu family
+# ubuntu:20.04 — incompatible: GLIBC_2.31 (worker requires GLIBC_2.33+)
+# debian:11    — incompatible: GLIBC_2.31 (worker requires GLIBC_2.33+)
+ubuntu:22.04
+ubuntu:24.04
+debian:12
+debian:13
+
+# Red Hat family (Fedora — last 3 stable releases)
+fedora:40
+fedora:41
+fedora:42
+
+# SUSE family
+# opensuse/leap:15.4 — incompatible: GLIBC_2.31 (worker requires GLIBC_2.33+)
+# opensuse/leap:15.5 — incompatible: GLIBC_2.31 (worker requires GLIBC_2.33+)
+opensuse/leap:15.6
+opensuse/tumbleweed

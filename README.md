@@ -108,6 +108,150 @@ npm run full:package-linux
 
 ---
 
+## Tests
+
+### Tests unitarios (Vitest)
+
+Cubren la lógica crítica de TypeScript: parseo del protocolo worker → bridge, estado del lector, caché de páginas y el manejador de eventos del visor.
+
+```bash
+npm test          # ejecutar una vez
+npm run test:watch  # modo watch (re-ejecuta al guardar)
+```
+
+Salida esperada:
+
+```
+ ✓ test/unit/bridge-parser.test.ts       (25 tests)
+ ✓ test/unit/reader-state.test.ts        (22 tests)
+ ✓ test/unit/page-cache.test.ts          (16 tests)
+ ✓ test/unit/viewer-event-handler.test.ts (16 tests)
+
+ Test Files  4 passed (4)
+      Tests  79 passed (79)
+```
+
+### Tests funcionales de workers
+
+Arrancan los workers nativos reales contra fixtures sintéticos y verifican eventos de protocolo, archivos de salida, miniaturas y el flujo focus/ready.
+
+Los tests funcionales están diseñados para ejecutarse en containers de distintas distribuciones (Ubuntu 20.04, 22.04, 24.04, Debian, Fedora, etc.) y verificar que los workers nativos funcionan correctamente en cada entorno.
+
+#### Paso 1 — Fixtures
+
+Los fixtures están incluidos en el repositorio (`test/fixtures/`), no hace falta generarlos. Solo es necesario regenerarlos si se modifica `generate-fixtures.py`:
+
+```bash
+python3 -m venv test/.venv
+source test/.venv/bin/activate
+pip install fpdf2
+python3 test/fixtures/generate-fixtures.py
+```
+
+Requiere `7z` en el sistema y opcionalmente `rar` (para CBR).
+
+#### Paso 2 — Ejecutar la matriz de distros (recomendado)
+
+```bash
+npm run pack
+npm run test:functional
+```
+
+Las distros están definidas en `test/workers/distros.txt`.
+
+**Sin `--pull` (por defecto):** solo usa imágenes ya presentes en el cache local de Docker. Las que no estén disponibles se marcan como `SKIP` — no descarga nada, funciona sin conexión.
+
+**Con `--pull` (primera vez o actualización):** descarga las imágenes que falten del cache y luego ejecuta los tests. Las dos acciones ocurren en el mismo comando:
+
+```bash
+npm run test:functional -- --pull
+```
+
+Salida esperada:
+
+```
+  Image                           Result  Time
+  ──────────────────────────────────────────────────
+  ubuntu:20.04                    PASS    43s
+  ubuntu:22.04                    PASS    41s
+  ubuntu:24.04                    PASS    39s
+  debian:11                       PASS    47s
+  debian:12                       PASS    44s
+  debian:13                       PASS    46s
+  fedora:40                       PASS    52s
+  fedora:41                       PASS    50s
+  fedora:42                       PASS    49s
+  opensuse/leap:15.4              PASS    55s
+  opensuse/leap:15.5              PASS    53s
+  opensuse/leap:15.6              PASS    51s
+  opensuse/tumbleweed             PASS    54s
+  ──────────────────────────────────────────────────
+  PASS: 13   FAIL: 0   SKIP: 0
+```
+
+Para agregar o quitar distros, editar `test/workers/distros.txt`.
+
+#### Paso 2 (alternativa) — Ejecutar localmente sin Docker
+
+```bash
+bash test/workers/run-worker-tests.sh
+```
+
+El script detecta automáticamente los binarios en `native/vendor/linux-x64/bin/`.
+
+**Flags disponibles (`run-distro-tests.sh`):**
+
+| Flag | Descripción |
+|---|---|
+| `--pull` | Descarga imágenes no presentes en cache local |
+| `--only-archive` | Solo tests de archive worker (cbz/cbr/cb7/cbt) |
+| `--only-doc` | Solo tests de doc-worker (pdf/epub) |
+| `--keep-output` | Conserva la salida del worker para inspección |
+| `--native-dir <path>` | Ruta explícita al directorio con `bin/` y `lib/` |
+| `--fixtures-dir <path>` | Ruta explícita al directorio de fixtures |
+| `--distros-file <path>` | Lista de imágenes alternativa a `distros.txt` |
+
+**Salida esperada:**
+
+```
+========================================
+ Archive Worker — Basic Extraction Tests
+========================================
+
+--- cbz_5pages ---
+  [PASS] cbz_5pages: archive event
+  [PASS] cbz_5pages: manifest.json valid
+  [PASS] cbz_5pages: page 0 processed (000000.jpg)
+  [PASS] cbz_5pages: 5 thumbnails generated
+...
+
+========================================
+  OVERALL: PASS
+```
+
+### Verificación de dependencias (portabilidad)
+
+Comprueba que los binarios nativos no tienen dependencias de sistema inesperadas (todo debe estar en `lib/` o ser glibc/libstdc++):
+
+```bash
+bash test/ldd/check-deps.sh native/vendor/linux-x64
+```
+
+Salida esperada (todas las libs clasificadas como `[BUNDLED]` o `[SYSTEM-OK]`):
+
+```
+=== check-deps: comiscopio-worker ===
+  [SYSTEM-OK]  libc.so.6                           /lib/x86_64-linux-gnu/libc.so.6
+  [SYSTEM-OK]  libstdc++.so.6                      /lib/x86_64-linux-gnu/libstdc++.so.6
+  [BUNDLED]    libvips.so.42                       /native/lib/libvips.so.42
+  ...
+  RESULT: 0 missing, 0 unexpected
+
+=== OVERALL: PASS (0 missing, 0 unexpected) ===
+```
+
+---
+
 ## Uso básico
 
 1. Abre un archivo con **Ctrl+O**, desde el menú contextual o arrastrándolo a la ventana.

@@ -34,6 +34,9 @@ yarn-error.log
 !.vscode/mcp.json
 .history/*
 
+# Python virtualenvs
+test/.venv/
+
 # Miscellaneous
 /.angular/cache
 .sass-cache/
@@ -60,3 +63,6 @@ otros-backends.md
 todo*.md
 ejecucion-mupdf.md
 docs/img*.png
+test-funcionales.md
+ejecutar-tests.md
+prueba-ejececion-test-funcionales*.txt
