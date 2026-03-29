@@ -66,7 +66,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: linux-builds
-          path: release/*.{AppImage,tar.gz}
+          path: |
+            release/*.AppImage
+            release/*.tar.gz
 
       - name: Upload native workers (for functional tests)
         uses: actions/upload-artifact@v4
