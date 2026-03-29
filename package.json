@@ -210,6 +210,12 @@
       ],
       "icon": "resources/icon.png"
     },
+    "extraFiles": [
+      {
+        "from": "scripts/uninstall.sh",
+        "to": "uninstall.sh"
+      }
+    ],
     "asar": true,
     "asarUnpack": [
       "node_modules/better-sqlite3/**",
