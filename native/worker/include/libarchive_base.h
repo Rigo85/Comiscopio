@@ -1,17 +1,12 @@
 #pragma once
 
 #include "archive_backend.h"
+#include "archive_entry_utils.h"
 
 #include <archive.h>
 #include <archive_entry.h>
 
 #include <string>
-#include <vector>
-
-struct LibarchiveIndexEntry {
-    std::string archiveName;
-    std::string rawPath;
-};
 
 /**
  * Base class for archive backends that use libarchive.
@@ -44,5 +39,5 @@ protected:
 private:
     archive* openArchive(const std::string& archivePath) const;
     std::string rawDir;
-    std::vector<LibarchiveIndexEntry> entries;
+    std::vector<CanonicalArchiveEntry> entries;
 };

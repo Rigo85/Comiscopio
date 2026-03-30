@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(comiscopio-worker LANGUAGES CXX)
+project(comiscopio-worker LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -9,6 +9,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(VIPS REQUIRED IMPORTED_TARGET vips)
 pkg_check_modules(ARCHIVE REQUIRED IMPORTED_TARGET libarchive)
+find_package(Threads REQUIRED)
 
 # Find nlohmann/json
 find_package(nlohmann_json REQUIRED)
@@ -38,6 +39,7 @@ endif()
 set(SOURCES
     src/app/main.cpp
     src/app/work_queue.cpp
+    src/archive/archive_entry_utils.cpp
     src/archive/libarchive_base.cpp
     src/archive/rar_backend.cpp
     src/archive/zip_backend.cpp
@@ -49,11 +51,39 @@ set(SOURCES
     src/output/progress.cpp
 )
 
-add_executable(comiscopio-worker ${SOURCES})
+set(SEVEN_Z_SDK_SOURCES
+    third_party/7zip-sdk-26.00/C/Bcj2.c
+    third_party/7zip-sdk-26.00/C/Bra.c
+    third_party/7zip-sdk-26.00/C/Bra86.c
+    third_party/7zip-sdk-26.00/C/BraIA64.c
+    third_party/7zip-sdk-26.00/C/CpuArch.c
+    third_party/7zip-sdk-26.00/C/Delta.c
+    third_party/7zip-sdk-26.00/C/Lzma2Dec.c
+    third_party/7zip-sdk-26.00/C/LzmaDec.c
+    third_party/7zip-sdk-26.00/C/Ppmd7.c
+    third_party/7zip-sdk-26.00/C/Ppmd7Dec.c
+    third_party/7zip-sdk-26.00/C/7zCrc.c
+    third_party/7zip-sdk-26.00/C/7zCrcOpt.c
+    third_party/7zip-sdk-26.00/C/7zAlloc.c
+    third_party/7zip-sdk-26.00/C/7zArcIn.c
+    third_party/7zip-sdk-26.00/C/7zBuf.c
+    third_party/7zip-sdk-26.00/C/7zBuf2.c
+    third_party/7zip-sdk-26.00/C/7zDec.c
+    third_party/7zip-sdk-26.00/C/7zFile.c
+    third_party/7zip-sdk-26.00/C/7zStream.c
+)
+
+add_executable(comiscopio-worker ${SOURCES} ${SEVEN_Z_SDK_SOURCES})
 
 target_include_directories(comiscopio-worker PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/7zip-sdk-26.00/C
     /usr/include/unrar
+)
+
+target_compile_definitions(comiscopio-worker PRIVATE
+    Z7_PPMD_SUPPORT
+    Z7_EXTRACT_ONLY
 )
 
 target_link_libraries(comiscopio-worker PRIVATE
@@ -61,6 +91,8 @@ target_link_libraries(comiscopio-worker PRIVATE
     PkgConfig::ARCHIVE
     nlohmann_json::nlohmann_json
     ${UNRAR_LIB}
+    Threads::Threads
+    ${CMAKE_DL_LIBS}
 )
 
 # Install target

@@ -2,52 +2,12 @@
 
 #include <algorithm>
 #include <csignal>
-#include <cstdint>
 #include <filesystem>
 #include <fstream>
-#include <set>
 #include <stdexcept>
 #include <string>
 
 namespace fs = std::filesystem;
-
-static const std::set<std::string> IMAGE_EXTENSIONS = {
-    ".jpg", ".jpeg", ".png", ".webp", ".avif", ".gif", ".bmp", ".tiff", ".tif"
-};
-
-static std::string toLowerStr(const std::string& s) {
-    std::string result = s;
-    std::transform(result.begin(), result.end(), result.begin(), ::tolower);
-    return result;
-}
-
-static std::string getExtension(const std::string& filename) {
-    auto pos = filename.rfind('.');
-    if (pos == std::string::npos) return "";
-    return toLowerStr(filename.substr(pos));
-}
-
-static std::string getBasename(const std::string& path) {
-    auto pos = path.find_last_of("/\\");
-    return (pos == std::string::npos) ? path : path.substr(pos + 1);
-}
-
-static bool isJunkEntry(const std::string& filename) {
-    const std::string base = getBasename(filename);
-    // macOS resource forks & metadata
-    if (base.rfind("._", 0) == 0) return true;
-    if (filename.find("__MACOSX/") != std::string::npos) return true;
-    // Windows thumbnail cache
-    if (toLowerStr(base) == "thumbs.db" || toLowerStr(base) == "desktop.ini") return true;
-    // Hidden dotfiles
-    if (!base.empty() && base[0] == '.') return true;
-    return false;
-}
-
-static bool isImageFile(const std::string& filename) {
-    if (isJunkEntry(filename)) return false;
-    return IMAGE_EXTENSIONS.count(getExtension(filename)) > 0;
-}
 
 static bool isCancelled(void* userData) {
     auto* ctx = reinterpret_cast<ArchiveCancelContext*>(userData);
@@ -91,11 +51,10 @@ int LibarchiveBackend::open(const std::string& archivePath, const std::string& r
             break;
         }
 
-        const char* pathname = archive_entry_pathname(entry);
-        std::string name = pathname ? pathname : "";
+        std::string name = archiveEntryPathUtf8(entry);
         const bool isDir = archive_entry_filetype(entry) == AE_IFDIR;
 
-        if (!isDir && !isImageFile(name)) {
+        if (!isDir && !isImageArchiveEntry(name)) {
             archive_read_data_skip(arc);
             continue;
         }
@@ -104,7 +63,7 @@ int LibarchiveBackend::open(const std::string& archivePath, const std::string& r
             continue;
         }
 
-        std::string ext = getExtension(name);
+        std::string ext = archiveExtension(name);
         if (ext.empty()) ext = ".bin";
 
         char tmpName[32];
@@ -145,11 +104,11 @@ int LibarchiveBackend::open(const std::string& archivePath, const std::string& r
         }
 
         if (!failed) {
-            entries.push_back({name, rawPath});
+            entries.push_back({name, name, rawPath});
         } else {
             std::error_code ec;
             fs::remove(rawPath, ec);
-            entries.push_back({name, ""});
+            entries.push_back({name, name, ""});
         }
 
         if (progressCb) {
@@ -161,41 +120,7 @@ int LibarchiveBackend::open(const std::string& archivePath, const std::string& r
     archive_read_close(arc);
     archive_read_free(arc);
 
-    // Sort entries by archive name and rename to sorted indices
-    std::vector<size_t> sortOrder(entries.size());
-    for (size_t i = 0; i < sortOrder.size(); i++) sortOrder[i] = i;
-    std::sort(sortOrder.begin(), sortOrder.end(), [&](size_t a, size_t b) {
-        return entries[a].archiveName < entries[b].archiveName;
-    });
-
-    std::vector<LibarchiveIndexEntry> sortedEntries;
-    sortedEntries.reserve(entries.size());
-    for (size_t i = 0; i < sortOrder.size(); i++) {
-        auto& current = entries[sortOrder[i]];
-        if (current.rawPath.empty()) {
-            sortedEntries.push_back({current.archiveName, ""});
-            continue;
-        }
-
-        std::string ext = getExtension(current.archiveName);
-        if (ext.empty()) ext = ".bin";
-        char finalName[32];
-        snprintf(finalName, sizeof(finalName), "%06d%s", static_cast<int>(i), ext.c_str());
-        std::string finalPath = rawDir + "/" + finalName;
-
-        if (current.rawPath != finalPath) {
-            std::error_code ec;
-            fs::rename(current.rawPath, finalPath, ec);
-            if (ec) {
-                fs::copy_file(current.rawPath, finalPath, fs::copy_options::overwrite_existing, ec);
-                fs::remove(current.rawPath, ec);
-            }
-        }
-
-        sortedEntries.push_back({current.archiveName, finalPath});
-    }
-
-    entries = std::move(sortedEntries);
+    entries = sortAndRenameEntries(rawDir, std::move(entries));
     return static_cast<int>(entries.size());
 }
 
@@ -211,10 +136,9 @@ bool LibarchiveBackend::extractPreview(const std::string& archivePath, const std
 
     archive_entry* entry = nullptr;
     while (archive_read_next_header(listArc, &entry) == ARCHIVE_OK) {
-        const char* pathname = archive_entry_pathname(entry);
-        std::string name = pathname ? pathname : "";
+        std::string name = archiveEntryPathUtf8(entry);
         const bool isDir = archive_entry_filetype(entry) == AE_IFDIR;
-        if (!isDir && isImageFile(name)) {
+        if (!isDir && isImageArchiveEntry(name)) {
             names.push_back(name);
         }
         archive_read_data_skip(listArc);
@@ -226,9 +150,9 @@ bool LibarchiveBackend::extractPreview(const std::string& archivePath, const std
         return false;
     }
 
-    std::sort(names.begin(), names.end());
+    std::sort(names.begin(), names.end(), naturalArchivePathLess);
     const std::string targetName = names[sortedIndex];
-    std::string ext = getExtension(targetName);
+    std::string ext = archiveExtension(targetName);
     if (ext.empty()) ext = ".bin";
 
     char finalName[32];
@@ -245,10 +169,9 @@ bool LibarchiveBackend::extractPreview(const std::string& archivePath, const std
 
     bool extracted = false;
     while (archive_read_next_header(arc, &entry) == ARCHIVE_OK) {
-        const char* pathname = archive_entry_pathname(entry);
-        std::string name = pathname ? pathname : "";
+        std::string name = archiveEntryPathUtf8(entry);
         const bool isDir = archive_entry_filetype(entry) == AE_IFDIR;
-        if (isDir || !isImageFile(name)) {
+        if (isDir || !isImageArchiveEntry(name)) {
             archive_read_data_skip(arc);
             continue;
         }
@@ -296,7 +219,7 @@ int LibarchiveBackend::entryCount() const {
 
 std::string LibarchiveBackend::entryName(int index) const {
     if (index < 0 || index >= static_cast<int>(entries.size())) return "";
-    return entries[index].archiveName;
+    return entries[index].archivePath;
 }
 
 bool LibarchiveBackend::getEntry(int index, std::vector<uint8_t>& outData) const {
