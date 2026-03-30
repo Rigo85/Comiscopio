@@ -32,7 +32,7 @@ Visor de cómics y manga para escritorio. Soporta archivos comprimidos (CBZ, CBR
 |---|---|---|
 | Comic ZIP | `.cbz`, `.zip` | libarchive |
 | Comic RAR | `.cbr`, `.rar` | libunrar |
-| Comic 7-Zip | `.cb7`, `.7z` | libarchive |
+| Comic 7-Zip | `.cb7`, `.7z` | 7-Zip SDK |
 | Comic TAR | `.cbt`, `.tar`, `.tgz` | libarchive |
 | PDF | `.pdf` | MuPDF |
 | EPUB | `.epub` | MuPDF |
@@ -91,20 +91,39 @@ npm install
 # Modo desarrollo (Angular dev server + Electron con hot-reload)
 npm start
 
-# Build de producción
+# Build local completo (workers nativos + Angular + Electron)
 npm run build
+
+# Regenerar bundle portable de workers nativos
+npm run build:portable
+
+# Validación local completa
+npm test
+
+# Empaquetar directorio Linux unpacked
+npm run pack
 
 # Empaquetar para Linux (AppImage + tar.gz)
 npm run dist:linux
 
 # Empaquetar para Windows (portable + zip)
 npm run dist:win
-
-# Build nativo portable con Docker + empaquetar (recomendado para distribución)
-npm run full:package-linux
 ```
 
-> `full:package-linux` compila los workers nativos en un contenedor Docker Ubuntu 22.04, enlazando las dependencias estáticamente o empaquetando los `.so` necesarios. Garantiza compatibilidad con distribuciones con glibc ≥ 2.35 sin depender del entorno del host.
+`npm run build:portable` compila los workers nativos en un contenedor Docker Ubuntu 22.04, enlazando o empaquetando las dependencias necesarias en `native/vendor/linux-x64/`. Ese bundle portable es el que consumen los tests funcionales locales y los empaquetados Linux.
+
+### Flujo recomendado
+
+```bash
+# Desarrollo
+npm start
+
+# Verificar que nada se rompió
+npm test
+
+# Generar artefactos Linux de distribución
+npm run dist:linux
+```
 
 ---
 
@@ -115,7 +134,7 @@ npm run full:package-linux
 Cubren la lógica crítica de TypeScript: parseo del protocolo worker → bridge, estado del lector, caché de páginas y el manejador de eventos del visor.
 
 ```bash
-npm test          # ejecutar una vez
+npm run test:unit   # ejecutar una vez
 npm run test:watch  # modo watch (re-ejecuta al guardar)
 ```
 
@@ -135,6 +154,20 @@ Salida esperada:
 
 Arrancan los workers nativos reales contra fixtures sintéticos y verifican eventos de protocolo, archivos de salida, miniaturas y el flujo focus/ready.
 
+Para validación local completa, el flujo recomendado es:
+
+```bash
+npm test
+```
+
+Eso ejecuta:
+
+- build local de workers + app
+- tests unitarios (`vitest`)
+- tests nativos (`ctest`)
+- rebuild del bundle portable
+- tests funcionales contra `native/vendor/linux-x64`
+
 Los tests funcionales están diseñados para ejecutarse en containers de distintas distribuciones (Ubuntu 20.04, 22.04, 24.04, Debian, Fedora, etc.) y verificar que los workers nativos funcionan correctamente en cada entorno.
 
 #### Paso 1 — Fixtures
@@ -149,6 +182,8 @@ python3 test/fixtures/generate-fixtures.py
 ```
 
 Requiere `7z` en el sistema y opcionalmente `rar` (para CBR).
+
+Los fixtures regenerados se versionan en el repositorio y se consumen directamente tanto en local como en CI.
 
 #### Paso 2 — Ejecutar la matriz de distros (recomendado)
 
@@ -196,6 +231,12 @@ bash test/workers/run-worker-tests.sh
 ```
 
 El script detecta automáticamente los binarios en `native/vendor/linux-x64/bin/`.
+Si acabas de cambiar código nativo, regenera antes el bundle portable:
+
+```bash
+npm run build:portable
+bash test/workers/run-worker-tests.sh
+```
 
 **Flags disponibles (`run-distro-tests.sh`):**
 
@@ -232,6 +273,7 @@ El script detecta automáticamente los binarios en `native/vendor/linux-x64/bin/
 Comprueba que los binarios nativos no tienen dependencias de sistema inesperadas (todo debe estar en `lib/` o ser glibc/libstdc++):
 
 ```bash
+npm run build:portable
 bash test/ldd/check-deps.sh native/vendor/linux-x64
 ```
 
