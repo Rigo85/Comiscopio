@@ -4,15 +4,35 @@
 
 #include <algorithm>
 #include <csignal>
+#include <codecvt>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <locale>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace fs = std::filesystem;
+
+namespace {
+
+std::string rarEntryNameUtf8(const RARHeaderDataEx& header) {
+    if (header.FileNameW[0] != 0) {
+        try {
+            std::wstring_convert<std::codecvt_utf8<wchar_t>> convert;
+            const std::string utf8 = convert.to_bytes(header.FileNameW);
+            if (!utf8.empty()) {
+                return normalizeArchivePath(utf8);
+            }
+        } catch (...) {
+        }
+    }
+    return normalizeArchivePath(header.FileName);
+}
+
+}  // namespace
 
 class RarBackend : public ArchiveBackend {
 public:
@@ -32,7 +52,7 @@ public:
             int imageCount = 0;
 
             while (!isCancelled() && RARReadHeaderEx(hArc, &header) == 0) {
-                std::string name = normalizeArchivePath(header.FileName);
+                std::string name = rarEntryNameUtf8(header);
                 const bool isDir = (header.Flags & RHDF_DIRECTORY) != 0;
                 const bool isImage = !isDir && isImageArchiveEntry(name);
 
@@ -84,7 +104,7 @@ public:
         openArchive(archivePath, [&](HANDLE hArc) {
             RARHeaderDataEx header{};
             while (RARReadHeaderEx(hArc, &header) == 0) {
-                std::string name = normalizeArchivePath(header.FileName);
+                std::string name = rarEntryNameUtf8(header);
                 const bool isDir = (header.Flags & RHDF_DIRECTORY) != 0;
                 if (!isDir && isImageArchiveEntry(name)) {
                     names.push_back(name);
@@ -115,7 +135,7 @@ public:
         openArchive(archivePath, [&](HANDLE hArc) {
             RARHeaderDataEx header{};
             while (RARReadHeaderEx(hArc, &header) == 0) {
-                std::string name = normalizeArchivePath(header.FileName);
+                std::string name = rarEntryNameUtf8(header);
                 const bool isDir = (header.Flags & RHDF_DIRECTORY) != 0;
                 if (isDir || !isImageArchiveEntry(name)) {
                     RARProcessFile(hArc, RAR_SKIP, nullptr, nullptr);

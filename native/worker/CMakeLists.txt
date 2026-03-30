@@ -95,5 +95,21 @@ target_link_libraries(comiscopio-worker PRIVATE
     ${CMAKE_DL_LIBS}
 )
 
+add_executable(archive-entry-utils-test
+    tests/archive_entry_utils_test.cpp
+    src/archive/archive_entry_utils.cpp
+)
+
+target_include_directories(archive-entry-utils-test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(archive-entry-utils-test PRIVATE
+    PkgConfig::ARCHIVE
+)
+
+enable_testing()
+add_test(NAME archive-entry-utils-test COMMAND archive-entry-utils-test)
+
 # Install target
 install(TARGETS comiscopio-worker RUNTIME DESTINATION bin)

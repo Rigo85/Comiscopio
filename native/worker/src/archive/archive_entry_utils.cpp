@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <codecvt>
 #include <filesystem>
+#include <locale>
 #include <set>
 #include <string>
 #include <system_error>
@@ -69,6 +71,16 @@ int compareDigitRuns(const std::string& lhs, std::size_t& i, const std::string& 
 
 std::string archiveEntryPathUtf8(archive_entry* entry) {
     if (!entry) return "";
+    if (const wchar_t* wide = archive_entry_pathname_w(entry)) {
+        try {
+            std::wstring_convert<std::codecvt_utf8<wchar_t>> convert;
+            const std::string utf8 = convert.to_bytes(wide);
+            if (!utf8.empty()) {
+                return normalizeArchivePath(utf8);
+            }
+        } catch (...) {
+        }
+    }
     if (const char* utf8 = archive_entry_pathname_utf8(entry)) {
         return normalizeArchivePath(utf8);
     }
@@ -127,17 +139,19 @@ std::string archiveExtension(const std::string& path) {
 }
 
 bool isJunkArchiveEntry(const std::string& path) {
-    const std::string base = archiveBasename(path);
+    const std::string normalized = normalizeArchivePath(path);
+    const std::string base = archiveBasename(normalized);
     if (base.rfind("._", 0) == 0) return true;
-    if (path.find("__macosx/") != std::string::npos) return true;
+    if (normalized.find("__macosx/") != std::string::npos) return true;
     if (base == "thumbs.db" || base == "desktop.ini") return true;
     if (!base.empty() && base[0] == '.') return true;
     return false;
 }
 
 bool isImageArchiveEntry(const std::string& path) {
-    if (isJunkArchiveEntry(path)) return false;
-    return IMAGE_EXTENSIONS.count(archiveExtension(path)) > 0;
+    const std::string normalized = normalizeArchivePath(path);
+    if (isJunkArchiveEntry(normalized)) return false;
+    return IMAGE_EXTENSIONS.count(archiveExtension(normalized)) > 0;
 }
 
 bool naturalArchivePathLess(const std::string& lhs, const std::string& rhs) {

@@ -9,6 +9,7 @@
 #include <nlohmann/json.hpp>
 
 #include <chrono>
+#include <clocale>
 #include <cstdarg>
 #include <csignal>
 #include <cstdio>
@@ -292,6 +293,10 @@ static void logMemoryDeltaIfLarge(const char* eventName,
 }
 
 int main(int argc, char* argv[]) {
+    if (!std::setlocale(LC_CTYPE, "")) {
+        std::setlocale(LC_CTYPE, "C.UTF-8");
+    }
+
     CliArgs args;
     if (!parseArgs(argc, argv, args)) return 1;
     ArchiveCancelContext cancelContext{&cancelled};

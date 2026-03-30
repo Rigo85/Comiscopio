@@ -222,6 +222,40 @@ else:
     fi
 }
 
+assert_manifest_order_normalized() {
+    local label="$1" manifest_path="$2" expected_joined="$3"
+    local result=""
+    if result=$(python3 - "$manifest_path" "$expected_joined" <<'PY'
+import json
+import sys
+
+def normalize(value: str) -> str:
+    value = value.replace('\\', '/')
+    while '//' in value:
+        value = value.replace('//', '/')
+    value = value.lstrip('./').strip('/')
+    return value.casefold()
+
+manifest_path = sys.argv[1]
+expected = [normalize(x) for x in sys.argv[2].split('|') if x]
+with open(manifest_path, 'r', encoding='utf-8') as fh:
+    data = json.load(fh)
+actual = [normalize(page.get('originalName', '')) for page in data.get('pages', []) if page]
+if actual == expected:
+    print("ok")
+else:
+    print("expected=" + repr(expected))
+    print("actual=" + repr(actual))
+    sys.exit(1)
+PY
+); then
+        pass "$label"
+    else
+        fail "$label (manifest order mismatch)"
+        [[ -n "$result" ]] && echo "    $result"
+    fi
+}
+
 # ── TEST: basic extraction per format ────────────────────────────────────────
 
 run_basic_test() {
@@ -266,6 +300,105 @@ run_basic_test() {
     fi
 }
 
+run_order_test() {
+    local label="$1" file="$2" backend="$3" expected_pages="$4" expected_order="$5"
+    local fixture="$FIXTURES_DIR/$file"
+
+    echo ""
+    echo "--- $label ---"
+
+    if [[ ! -f "$fixture" ]]; then
+        fail "$label: fixture not found: $fixture"
+        return
+    fi
+
+    local out_dir="$OUTPUT_BASE/${label}_work"
+    local log_dir="$OUTPUT_BASE/${label}_logs"
+    mkdir -p "$log_dir"
+    local fifo="$log_dir/stdin_pipe"
+    mkfifo "$fifo"
+
+    worker_exec \
+        --input "$fixture" \
+        --output "$out_dir" \
+        --backend "$backend" \
+        --reader-format jpeg \
+        --thumb-width 180 --thumb-quality 60 \
+        --reader-max-dimension 800 --reader-quality 82 \
+        --vips-concurrency 1 --window-before 0 --window-after 0 \
+        > "$log_dir/stdout.log" 2> "$log_dir/stderr.log" < "$fifo" &
+    local worker_pid=$!
+    BACKGROUND_PIDS+=("$worker_pid")
+    exec 5> "$fifo"
+
+    local archive_deadline=$((SECONDS + 30))
+    local got_archive=false
+    while [[ $SECONDS -lt $archive_deadline ]]; do
+        if grep -q '"type":"archive"' "$log_dir/stdout.log" 2>/dev/null; then
+            got_archive=true
+            break
+        fi
+        if grep -q '"type":"error"' "$log_dir/stdout.log" 2>/dev/null; then
+            break
+        fi
+        sleep 0.2
+    done
+
+    if [[ "$got_archive" == true ]]; then
+        for ((page = 0; page < expected_pages; page++)); do
+            echo "{\"type\":\"focus\",\"page\":$page}" >&5
+            local ready_deadline=$((SECONDS + 15))
+            while [[ $SECONDS -lt $ready_deadline ]]; do
+                if python3 - "$log_dir/stdout.log" "$page" <<'PY'
+import json
+import sys
+with open(sys.argv[1], 'r', encoding='utf-8') as fh:
+    for line in fh:
+        line = line.strip()
+        if not line.startswith('{'):
+            continue
+        try:
+            data = json.loads(line)
+        except Exception:
+            continue
+        if data.get('type') == 'ready' and data.get('page') == int(sys.argv[2]):
+            sys.exit(0)
+sys.exit(1)
+PY
+                then
+                    break
+                fi
+                sleep 0.2
+            done
+        done
+    fi
+
+    echo '{"type":"quit"}' >&5
+    exec 5>&-
+    rm -f "$fifo"
+
+    for _ in {1..25}; do
+        kill -0 "$worker_pid" 2>/dev/null || break
+        sleep 0.2
+    done
+    if kill -0 "$worker_pid" 2>/dev/null; then
+        kill "$worker_pid" 2>/dev/null || true
+    fi
+    wait "$worker_pid" 2>/dev/null || true
+
+    assert_event "$label: archive event" "$log_dir/stdout.log" "archive" "totalPages" "$expected_pages"
+    assert_json_valid "$label: manifest.json valid" "$out_dir/manifest.json"
+    assert_manifest_order_normalized "$label: manifest order" "$out_dir/manifest.json" "$expected_order"
+
+    local thumb_count
+    thumb_count=$(find "$out_dir/thumbs" -name '*.jpg' 2>/dev/null | wc -l | tr -d ' ') || true
+    if [[ "$thumb_count" -eq "$expected_pages" ]]; then
+        pass "$label: $expected_pages thumbnails generated"
+    else
+        fail "$label: expected $expected_pages thumbnails, found $thumb_count"
+    fi
+}
+
 echo "========================================"
 echo " Archive Worker — Basic Extraction Tests"
 echo "========================================"
@@ -282,6 +415,39 @@ else
     echo ""
     echo "--- cbr_5pages ---"
     echo "  [SKIP] test-5pages.cbr not found (rar not available)"
+fi
+
+echo ""
+echo "========================================"
+echo " Archive Worker — Structured Layout Tests"
+echo "========================================"
+
+ROOT_ORDER='comic/0001.png|comic/0002.png|comic/0003.png|comic/0004.png|comic/0005.png'
+UNICODE_ORDER='Capítulo Único/Página_01.png|Capítulo Único/Página_02.png|Capítulo Único/Página_03.png|Capítulo Único/Página_04.png|Capítulo Único/Página_05.png'
+COMICINFO_JUNK_ORDER='Comic Deluxe/0001.png|Comic Deluxe/0002.png|Comic Deluxe/0003.png|Comic Deluxe/0004.png|Comic Deluxe/0005.png'
+MULTIFOLDER_ORDER='cap_01/0001.png|cap_01/0002.png|cap_02/0001.png|cap_10/0001.png|extras/0001.png'
+
+run_order_test "cbz_root_folder" "test-root-folder.cbz" "zip" 5 "$ROOT_ORDER"
+run_order_test "cbt_root_folder" "test-root-folder.cbt" "tar" 5 "$ROOT_ORDER"
+run_order_test "cb7_root_folder" "test-root-folder.cb7" "7z" 5 "$ROOT_ORDER"
+
+run_order_test "cbz_unicode_folder" "test-unicode-folder.cbz" "zip" 5 "$UNICODE_ORDER"
+run_order_test "cbt_unicode_folder" "test-unicode-folder.cbt" "tar" 5 "$UNICODE_ORDER"
+run_order_test "cb7_unicode_folder" "test-unicode-folder.cb7" "7z" 5 "$UNICODE_ORDER"
+
+run_order_test "cbz_comicinfo_junk" "test-comicinfo-junk.cbz" "zip" 5 "$COMICINFO_JUNK_ORDER"
+run_order_test "cbt_comicinfo_junk" "test-comicinfo-junk.cbt" "tar" 5 "$COMICINFO_JUNK_ORDER"
+run_order_test "cb7_comicinfo_junk" "test-comicinfo-junk.cb7" "7z" 5 "$COMICINFO_JUNK_ORDER"
+
+run_order_test "cbz_multifolder" "test-multifolder.cbz" "zip" 5 "$MULTIFOLDER_ORDER"
+run_order_test "cbt_multifolder" "test-multifolder.cbt" "tar" 5 "$MULTIFOLDER_ORDER"
+run_order_test "cb7_multifolder" "test-multifolder.cb7" "7z" 5 "$MULTIFOLDER_ORDER"
+
+if [[ -f "$FIXTURES_DIR/test-root-folder.cbr" ]]; then
+    run_order_test "cbr_root_folder" "test-root-folder.cbr" "rar" 5 "$ROOT_ORDER"
+    run_order_test "cbr_unicode_folder" "test-unicode-folder.cbr" "rar" 5 "$UNICODE_ORDER"
+    run_order_test "cbr_comicinfo_junk" "test-comicinfo-junk.cbr" "rar" 5 "$COMICINFO_JUNK_ORDER"
+    run_order_test "cbr_multifolder" "test-multifolder.cbr" "rar" 5 "$MULTIFOLDER_ORDER"
 fi
 
 # ── TEST: error cases ─────────────────────────────────────────────────────

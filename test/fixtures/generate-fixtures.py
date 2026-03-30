@@ -1,24 +1,19 @@
 #!/usr/bin/env python3
-"""Generate test fixture archives for Comiscopio worker tests.
+"""Generate synthetic fixtures for Comiscopio worker tests.
 
-Output structure:
-  archive/
-    test-5pages.cbz     — 5 pages, ZIP
-    test-5pages.cbr     — 5 pages, RAR  (requires `rar` on PATH)
-    test-5pages.cb7     — 5 pages, 7z
-    test-5pages.cbt     — 5 pages, TAR
-    test-single.cbz     — 1 page,  ZIP  (edge case)
-    test-empty.cbz      — ZIP with no image files (error case)
-    test-not-images.tar — TAR of CBR files, not direct images (error case)
-  doc/
-    test-5pages.pdf     — 5-page PDF  (requires fpdf2)
-    test-5pages.epub    — 5-page EPUB
-
-All pages are 200×300 px solid-colour PNGs.
+Archive fixtures cover:
+- flat archives
+- single-page archive
+- empty archive / non-image archive
+- common root folder
+- Unicode folder and file names
+- sidecars and junk files
+- multiple folders with natural ordering and extras included
 """
 
 import io
 import os
+import shutil
 import struct
 import subprocess
 import sys
@@ -32,21 +27,16 @@ ARCHIVE_DIR = os.path.join(SCRIPT_DIR, 'archive')
 DOC_DIR = os.path.join(SCRIPT_DIR, 'doc')
 
 COLORS = [
-    (220, 60,  60),   # red
-    (60,  180, 60),   # green
-    (60,  100, 220),  # blue
-    (220, 180, 60),   # yellow
-    (180, 60,  220),  # purple
+    (220, 60, 60),
+    (60, 180, 60),
+    (60, 100, 220),
+    (220, 180, 60),
+    (180, 60, 220),
 ]
 PAGE_W, PAGE_H = 200, 300
 
 
-# ---------------------------------------------------------------------------
-# Minimal PNG encoder (stdlib only, no Pillow)
-# ---------------------------------------------------------------------------
-
 def make_png(width: int, height: int, r: int, g: int, b: int) -> bytes:
-    """Create a minimal valid RGB PNG filled with a solid colour."""
     def chunk(tag: bytes, data: bytes) -> bytes:
         length = struct.pack('>I', len(data))
         payload = tag + data
@@ -61,56 +51,103 @@ def make_png(width: int, height: int, r: int, g: int, b: int) -> bytes:
     return b'\x89PNG\r\n\x1a\n' + ihdr + idat + iend
 
 
-def page_pngs(count: int = 5) -> list[tuple[str, bytes]]:
-    return [(f'{i+1:04d}.png', make_png(PAGE_W, PAGE_H, *COLORS[i % len(COLORS)]))
-            for i in range(count)]
+def page_entries(names: list[str]) -> list[tuple[str, bytes]]:
+    entries: list[tuple[str, bytes]] = []
+    for index, name in enumerate(names):
+        entries.append((name, make_png(PAGE_W, PAGE_H, *COLORS[index % len(COLORS)])))
+    return entries
 
 
-# ---------------------------------------------------------------------------
-# Archive builders
-# ---------------------------------------------------------------------------
+def flat_entries(count: int = 5) -> list[tuple[str, bytes]]:
+    return page_entries([f'{i + 1:04d}.png' for i in range(count)])
 
-def build_cbz(dest: str, pages: list[tuple[str, bytes]]) -> None:
+
+def root_folder_entries() -> list[tuple[str, bytes]]:
+    return page_entries([f'comic/{i + 1:04d}.png' for i in range(5)])
+
+
+def unicode_folder_entries() -> list[tuple[str, bytes]]:
+    return page_entries([f'Capítulo Único/Página_{i + 1:02d}.png' for i in range(5)])
+
+
+def comicinfo_junk_entries() -> list[tuple[str, bytes]]:
+    entries = page_entries([f'Comic Deluxe/{i + 1:04d}.png' for i in range(5)])
+    entries.extend([
+        ('Comic Deluxe/ComicInfo.xml', b'<ComicInfo><Title>Fixture</Title></ComicInfo>\n'),
+        ('Comic Deluxe/.DS_Store', b'junk\n'),
+        ('Comic Deluxe/Thumbs.db', b'junk\n'),
+        ('Comic Deluxe/desktop.ini', b'junk\n'),
+        ('__MACOSX/Comic Deluxe/._0001.png', b'junk\n'),
+    ])
+    return entries
+
+
+def multifolder_entries() -> list[tuple[str, bytes]]:
+    return page_entries([
+        'extras/0001.png',
+        'cap_10/0001.png',
+        'cap_02/0001.png',
+        'cap_01/0002.png',
+        'cap_01/0001.png',
+    ])
+
+
+def write_tree(base_dir: str, entries: list[tuple[str, bytes]]) -> None:
+    for rel_path, data in entries:
+        full_path = os.path.join(base_dir, rel_path)
+        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        with open(full_path, 'wb') as f:
+            f.write(data)
+
+
+def relative_files(base_dir: str) -> list[str]:
+    paths: list[str] = []
+    for root, _, files in os.walk(base_dir):
+        for name in files:
+            rel = os.path.relpath(os.path.join(root, name), base_dir)
+            paths.append(rel)
+    return sorted(paths)
+
+
+def build_cbz(dest: str, entries: list[tuple[str, bytes]]) -> None:
     with zipfile.ZipFile(dest, 'w', zipfile.ZIP_DEFLATED) as zf:
-        for name, data in pages:
+        for name, data in entries:
             zf.writestr(name, data)
     print(f'  {dest}')
 
 
-def build_cbt(dest: str, pages: list[tuple[str, bytes]]) -> None:
+def build_cbt(dest: str, entries: list[tuple[str, bytes]]) -> None:
     with tarfile.open(dest, 'w') as tf:
-        for name, data in pages:
+        for name, data in entries:
             info = tarfile.TarInfo(name=name)
             info.size = len(data)
             tf.addfile(info, io.BytesIO(data))
     print(f'  {dest}')
 
 
-def build_cb7(dest: str, pages: list[tuple[str, bytes]], tmpdir: str) -> None:
-    src_dir = os.path.join(tmpdir, 'cb7_pages')
+def build_cb7(dest: str, entries: list[tuple[str, bytes]], tmpdir: str, name: str) -> None:
+    src_dir = os.path.join(tmpdir, f'cb7_{name}')
     os.makedirs(src_dir, exist_ok=True)
-    for name, data in pages:
-        with open(os.path.join(src_dir, name), 'wb') as f:
-            f.write(data)
+    write_tree(src_dir, entries)
     result = subprocess.run(
-        ['7z', 'a', '-t7z', '-mx=1', dest] + [os.path.join(src_dir, n) for n, _ in pages],
+        ['7z', 'a', '-t7z', '-mx=1', dest] + relative_files(src_dir),
         capture_output=True,
+        cwd=src_dir,
     )
     if result.returncode != 0:
-        print(f'  WARNING: 7z failed — {result.stderr.decode()[:120]}', file=sys.stderr)
+        print(f'  WARNING: 7z failed for {dest} — {result.stderr.decode()[:160]}', file=sys.stderr)
     else:
         print(f'  {dest}')
 
 
-def build_cbr(dest: str, pages: list[tuple[str, bytes]], tmpdir: str) -> None:
-    src_dir = os.path.join(tmpdir, 'cbr_pages')
+def build_cbr(dest: str, entries: list[tuple[str, bytes]], tmpdir: str, name: str) -> None:
+    src_dir = os.path.join(tmpdir, f'cbr_{name}')
     os.makedirs(src_dir, exist_ok=True)
-    for name, data in pages:
-        with open(os.path.join(src_dir, name), 'wb') as f:
-            f.write(data)
+    write_tree(src_dir, entries)
     result = subprocess.run(
-        ['rar', 'a', '-m1', '-ep', dest] + [os.path.join(src_dir, n) for n, _ in pages],
+        ['rar', 'a', '-m1', dest] + relative_files(src_dir),
         capture_output=True,
+        cwd=src_dir,
     )
     if result.returncode != 0:
         print(f'  WARNING: rar failed — install `rar` to generate CBR fixtures', file=sys.stderr)
@@ -148,25 +185,20 @@ def build_epub(dest: str) -> None:
 </container>
 """
     opf_items = '\n'.join(
-        f'    <item id="page{i+1}" href="page{i+1}.xhtml"'
-        f' media-type="application/xhtml+xml"/>'
+        f'    <item id="page{i+1}" href="page{i+1}.xhtml" media-type="application/xhtml+xml"/>'
         for i in range(5)
     )
-    spine_items = '\n'.join(
-        f'    <itemref idref="page{i+1}"/>' for i in range(5)
-    )
+    spine_items = '\n'.join(f'    <itemref idref="page{i+1}"/>' for i in range(5))
     content_opf = f"""\
 <?xml version="1.0" encoding="UTF-8"?>
-<package xmlns="http://www.idpf.org/2007/opf"
-         unique-identifier="uid" version="2.0">
+<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="uid" version="2.0">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
     <dc:title>Test Comic</dc:title>
     <dc:identifier id="uid">test-comic-001</dc:identifier>
     <dc:language>es</dc:language>
   </metadata>
   <manifest>
-    <item id="ncx" href="toc.ncx"
-          media-type="application/x-dtbncx+xml"/>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
 {opf_items}
   </manifest>
   <spine toc="ncx">
@@ -182,6 +214,7 @@ def build_epub(dest: str) -> None:
   <navMap/>
 </ncx>
 """
+
     def xhtml_page(idx: int, r: int, g: int, b: int) -> bytes:
         return f"""\
 <?xml version="1.0" encoding="UTF-8"?>
@@ -197,8 +230,7 @@ def build_epub(dest: str) -> None:
 """.encode()
 
     with zipfile.ZipFile(dest, 'w', zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(zipfile.ZipInfo('mimetype'), b'application/epub+zip',
-                    compress_type=zipfile.ZIP_STORED)
+        zf.writestr(zipfile.ZipInfo('mimetype'), b'application/epub+zip', compress_type=zipfile.ZIP_STORED)
         zf.writestr('META-INF/container.xml', container_xml)
         zf.writestr('OEBPS/content.opf', content_opf)
         zf.writestr('OEBPS/toc.ncx', toc_ncx)
@@ -215,32 +247,39 @@ def build_empty_cbz(dest: str) -> None:
 
 def build_not_images_tar(dest: str, cbr_path: str) -> None:
     if not os.path.exists(cbr_path):
-        print(f'  WARNING: {cbr_path} not found — skipping test-not-images.tar',
-              file=sys.stderr)
+        print(f'  WARNING: {cbr_path} not found — skipping test-not-images.tar', file=sys.stderr)
         return
     with tarfile.open(dest, 'w') as tf:
         tf.add(cbr_path, arcname=os.path.basename(cbr_path))
     print(f'  {dest}')
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+def build_archive_family(name: str, entries: list[tuple[str, bytes]], tmpdir: str) -> None:
+    build_cbz(os.path.join(ARCHIVE_DIR, f'{name}.cbz'), entries)
+    build_cbt(os.path.join(ARCHIVE_DIR, f'{name}.cbt'), entries)
+    build_cb7(os.path.join(ARCHIVE_DIR, f'{name}.cb7'), entries, tmpdir, name)
+    build_cbr(os.path.join(ARCHIVE_DIR, f'{name}.cbr'), entries, tmpdir, name)
 
-def main() -> None:
+
+def reset_output_dirs() -> None:
+    shutil.rmtree(ARCHIVE_DIR, ignore_errors=True)
+    shutil.rmtree(DOC_DIR, ignore_errors=True)
     os.makedirs(ARCHIVE_DIR, exist_ok=True)
     os.makedirs(DOC_DIR, exist_ok=True)
 
-    print('archive/')
-    pages5 = page_pngs(5)
-    pages1 = page_pngs(1)
 
+def main() -> None:
+    reset_output_dirs()
+
+    print('archive/')
     with tempfile.TemporaryDirectory() as tmpdir:
-        build_cbz(os.path.join(ARCHIVE_DIR, 'test-5pages.cbz'), pages5)
-        build_cbz(os.path.join(ARCHIVE_DIR, 'test-single.cbz'), pages1)
-        build_cbt(os.path.join(ARCHIVE_DIR, 'test-5pages.cbt'), pages5)
-        build_cb7(os.path.join(ARCHIVE_DIR, 'test-5pages.cb7'), pages5, tmpdir)
-        build_cbr(os.path.join(ARCHIVE_DIR, 'test-5pages.cbr'), pages5, tmpdir)
+        build_archive_family('test-5pages', flat_entries(5), tmpdir)
+        build_archive_family('test-root-folder', root_folder_entries(), tmpdir)
+        build_archive_family('test-unicode-folder', unicode_folder_entries(), tmpdir)
+        build_archive_family('test-comicinfo-junk', comicinfo_junk_entries(), tmpdir)
+        build_archive_family('test-multifolder', multifolder_entries(), tmpdir)
+
+        build_cbz(os.path.join(ARCHIVE_DIR, 'test-single.cbz'), flat_entries(1))
         build_empty_cbz(os.path.join(ARCHIVE_DIR, 'test-empty.cbz'))
         build_not_images_tar(
             os.path.join(ARCHIVE_DIR, 'test-not-images.tar'),
@@ -250,7 +289,6 @@ def main() -> None:
     print('doc/')
     build_pdf(os.path.join(DOC_DIR, 'test-5pages.pdf'))
     build_epub(os.path.join(DOC_DIR, 'test-5pages.epub'))
-
     print('Done.')
 
 

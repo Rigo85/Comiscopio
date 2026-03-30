@@ -46,7 +46,12 @@ int LibarchiveBackend::open(const std::string& archivePath, const std::string& r
     archive_entry* entry = nullptr;
     int imageCount = 0;
 
-    while (archive_read_next_header(arc, &entry) == ARCHIVE_OK) {
+    while (true) {
+        const int headerStatus = archive_read_next_header(arc, &entry);
+        if (headerStatus == ARCHIVE_EOF) break;
+        if (headerStatus == ARCHIVE_RETRY) continue;
+        if (headerStatus != ARCHIVE_OK && headerStatus != ARCHIVE_WARN) break;
+
         if (isCancelled(userData)) {
             break;
         }
@@ -135,7 +140,12 @@ bool LibarchiveBackend::extractPreview(const std::string& archivePath, const std
     archive* listArc = openArchive(archivePath);
 
     archive_entry* entry = nullptr;
-    while (archive_read_next_header(listArc, &entry) == ARCHIVE_OK) {
+    while (true) {
+        const int headerStatus = archive_read_next_header(listArc, &entry);
+        if (headerStatus == ARCHIVE_EOF) break;
+        if (headerStatus == ARCHIVE_RETRY) continue;
+        if (headerStatus != ARCHIVE_OK && headerStatus != ARCHIVE_WARN) break;
+
         std::string name = archiveEntryPathUtf8(entry);
         const bool isDir = archive_entry_filetype(entry) == AE_IFDIR;
         if (!isDir && isImageArchiveEntry(name)) {
@@ -168,7 +178,12 @@ bool LibarchiveBackend::extractPreview(const std::string& archivePath, const std
     archive* arc = openArchive(archivePath);
 
     bool extracted = false;
-    while (archive_read_next_header(arc, &entry) == ARCHIVE_OK) {
+    while (true) {
+        const int headerStatus = archive_read_next_header(arc, &entry);
+        if (headerStatus == ARCHIVE_EOF) break;
+        if (headerStatus == ARCHIVE_RETRY) continue;
+        if (headerStatus != ARCHIVE_OK && headerStatus != ARCHIVE_WARN) break;
+
         std::string name = archiveEntryPathUtf8(entry);
         const bool isDir = archive_entry_filetype(entry) == AE_IFDIR;
         if (isDir || !isImageArchiveEntry(name)) {

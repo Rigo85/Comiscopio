@@ -23,10 +23,14 @@ pip install fpdf2
 
 | File | Format | Pages | Purpose |
 |---|---|---|---|
-| `test-5pages.cbz` | ZIP | 5 | Main archive fixture — used by most tests |
-| `test-5pages.cbr` | RAR5 | 5 | RAR backend test |
-| `test-5pages.cb7` | 7z | 5 | 7z backend test |
-| `test-5pages.cbt` | TAR | 5 | TAR backend test |
+| `test-5pages.cbz` | ZIP | 5 | Main flat archive fixture |
+| `test-5pages.cbr` | RAR5 | 5 | Main flat RAR fixture |
+| `test-5pages.cb7` | 7z | 5 | Main flat 7z fixture |
+| `test-5pages.cbt` | TAR | 5 | Main flat TAR fixture |
+| `test-root-folder.{cbz,cbr,cb7,cbt}` | Mixed | 5 | Single root folder containing all pages |
+| `test-unicode-folder.{cbz,cbr,cb7,cbt}` | Mixed | 5 | Unicode folder and file names |
+| `test-comicinfo-junk.{cbz,cbr,cb7,cbt}` | Mixed | 5 | Pages plus ComicInfo.xml and junk system files |
+| `test-multifolder.{cbz,cbr,cb7,cbt}` | Mixed | 5 | Multiple folders with natural path ordering and extras included |
 | `test-single.cbz` | ZIP | 1 | Edge case: single-page archive |
 | `test-empty.cbz` | ZIP | 0 | Error case: archive with no image files |
 | `test-not-images.tar` | TAR | — | Error case: TAR containing CBR files, not images |
@@ -41,7 +45,13 @@ pip install fpdf2
 ## Page content
 
 Each page is a 200×300 px solid-colour PNG (red, green, blue, yellow, purple).
-Files are named `0001.png`…`0005.png` inside the archives.
+The structured fixtures intentionally vary:
+- flat pages in root
+- common root folder
+- Unicode names like `Capítulo Único/Página_01.png`
+- sidecars like `ComicInfo.xml`
+- junk entries like `__MACOSX`, `._*`, `.DS_Store`, `Thumbs.db`
+- multi-folder layouts such as `cap_01/`, `cap_02/`, `cap_10/`, `extras/`
 
 ## Licensing
 
