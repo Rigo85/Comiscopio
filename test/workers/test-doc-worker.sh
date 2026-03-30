@@ -58,17 +58,40 @@ FAIL=0
 # Wrap worker invocations to scope LD_LIBRARY_PATH only to the worker process.
 worker_exec() {
     if [[ -n "$LIB_DIR" ]]; then
-        LD_LIBRARY_PATH="$LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$WORKER_BIN" "$@"
+        exec env "LD_LIBRARY_PATH=$LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$WORKER_BIN" "$@"
     else
-        "$WORKER_BIN" "$@"
+        exec "$WORKER_BIN" "$@"
     fi
 }
 
 # ── cleanup trap — kill any background workers on exit (normal, Ctrl+C, error)
 BACKGROUND_PIDS=()
+terminate_pid() {
+    local pid="$1"
+    local term_wait="${2:-25}"
+    local kill_wait="${3:-10}"
+
+    kill -0 "$pid" 2>/dev/null || return 0
+
+    kill "$pid" 2>/dev/null || true
+    for ((i = 0; i < term_wait; i++)); do
+        kill -0 "$pid" 2>/dev/null || return 0
+        sleep 0.2
+    done
+
+    kill -9 "$pid" 2>/dev/null || true
+    for ((i = 0; i < kill_wait; i++)); do
+        kill -0 "$pid" 2>/dev/null || return 0
+        sleep 0.2
+    done
+
+    return 1
+}
+
 cleanup() {
     for pid in "${BACKGROUND_PIDS[@]:-}"; do
-        kill "$pid" 2>/dev/null || true
+        terminate_pid "$pid" || true
+        wait "$pid" 2>/dev/null || true
     done
 }
 trap cleanup EXIT INT TERM
@@ -190,7 +213,7 @@ run_doc_worker() {
         done
     fi
 
-    kill "$pid" 2>/dev/null || true
+    terminate_pid "$pid" || true
     wait "$pid" 2>/dev/null || true
 
     if [[ "$got_archive" == false ]] && ! grep -q '"type":"error"' "$log_dir/stdout.log" 2>/dev/null; then
@@ -327,15 +350,10 @@ echo "--- focus_ready PDF (page 1 of test-5pages.pdf) ---"
     echo '{"type":"quit"}' >&4
     exec 4>&-
 
-    for _ in {1..15}; do
-        kill -0 "$WORKER_PID" 2>/dev/null || break
-        sleep 0.2
-    done
-    if kill -0 "$WORKER_PID" 2>/dev/null; then
-        kill "$WORKER_PID" 2>/dev/null || true
-        fail "doc_focus_ready: worker did not exit cleanly"
-    else
+    if terminate_pid "$WORKER_PID"; then
         pass "doc_focus_ready: worker exited cleanly"
+    else
+        fail "doc_focus_ready: worker did not exit cleanly"
     fi
     wait "$WORKER_PID" 2>/dev/null || true
     rm -f "$log_dir/stdin_pipe"

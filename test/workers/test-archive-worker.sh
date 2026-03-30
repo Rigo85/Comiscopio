@@ -60,17 +60,40 @@ FAIL=0
 # that also link against libselinux and would pick up the bundled version.
 worker_exec() {
     if [[ -n "$LIB_DIR" ]]; then
-        LD_LIBRARY_PATH="$LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$WORKER_BIN" "$@"
+        exec env "LD_LIBRARY_PATH=$LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$WORKER_BIN" "$@"
     else
-        "$WORKER_BIN" "$@"
+        exec "$WORKER_BIN" "$@"
     fi
 }
 
 # ── cleanup trap — kill any background workers on exit (normal, Ctrl+C, error)
 BACKGROUND_PIDS=()
+terminate_pid() {
+    local pid="$1"
+    local term_wait="${2:-25}"
+    local kill_wait="${3:-10}"
+
+    kill -0 "$pid" 2>/dev/null || return 0
+
+    kill "$pid" 2>/dev/null || true
+    for ((i = 0; i < term_wait; i++)); do
+        kill -0 "$pid" 2>/dev/null || return 0
+        sleep 0.2
+    done
+
+    kill -9 "$pid" 2>/dev/null || true
+    for ((i = 0; i < kill_wait; i++)); do
+        kill -0 "$pid" 2>/dev/null || return 0
+        sleep 0.2
+    done
+
+    return 1
+}
+
 cleanup() {
     for pid in "${BACKGROUND_PIDS[@]:-}"; do
-        kill "$pid" 2>/dev/null || true
+        terminate_pid "$pid" || true
+        wait "$pid" 2>/dev/null || true
     done
 }
 trap cleanup EXIT INT TERM
@@ -146,7 +169,7 @@ run_worker_basic() {
     fi
 
     # Kill the worker now that we have what we need (or timed out)
-    kill "$pid" 2>/dev/null || true
+    terminate_pid "$pid" || true
     wait "$pid" 2>/dev/null || true
 
     if [[ "$got_archive" == false ]] && ! grep -q '"type":"error"' "$log_dir/stdout.log" 2>/dev/null; then
@@ -377,13 +400,7 @@ PY
     exec 5>&-
     rm -f "$fifo"
 
-    for _ in {1..25}; do
-        kill -0 "$worker_pid" 2>/dev/null || break
-        sleep 0.2
-    done
-    if kill -0 "$worker_pid" 2>/dev/null; then
-        kill "$worker_pid" 2>/dev/null || true
-    fi
+    terminate_pid "$worker_pid" || true
     wait "$worker_pid" 2>/dev/null || true
 
     assert_event "$label: archive event" "$log_dir/stdout.log" "archive" "totalPages" "$expected_pages"

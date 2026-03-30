@@ -13,7 +13,7 @@ env:
 
 jobs:
   # ── 1. Unit tests ────────────────────────────────────────────────────────────
-  # Fast: vitest only, no workers needed.
+  # Fast: vitest only, no native workers needed.
   test-unit:
     runs-on: ubuntu-latest
     steps:
@@ -28,7 +28,7 @@ jobs:
         run: npm install
 
       - name: Run unit tests
-        run: npm test
+        run: npm run test:unit
 
   # ── 2. Build Linux ───────────────────────────────────────────────────────────
   # Blocked by unit tests. Produces two artifacts:
@@ -55,7 +55,7 @@ jobs:
         run: npm run build:native-linux
 
       - name: Build Angular + Electron
-        run: npm run build
+        run: npm run build:app
 
       - name: Package Linux
         run: NODE_NO_WARNINGS=1 npx electron-builder --linux
