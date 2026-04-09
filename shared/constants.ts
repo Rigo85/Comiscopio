@@ -61,4 +61,4 @@ export const THUMBNAIL_PROTOCOL_SCHEME = 'comiscopio-thumb';
 export const PAGE_PROTOCOL_SCHEME = 'comiscopio-page';
 
 /** App version — synced from package.json at build time */
-export const APP_VERSION = '0.1.0';
+export const APP_VERSION = '0.2.0';

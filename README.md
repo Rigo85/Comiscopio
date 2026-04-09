@@ -64,8 +64,8 @@ sudo apt install libfuse2   # Ubuntu 22.04+ / Debian 12+
 Como alternativa sin FUSE, descarga el `tar.gz`, extrae y ejecuta el binario directamente:
 
 ```bash
-tar -xzf comiscopio-0.1.0.tar.gz
-./comiscopio-0.1.0/comiscopio
+tar -xzf comiscopio-0.2.0.tar.gz
+./comiscopio-0.2.0/comiscopio
 ```
 
 ### Compilar desde código fuente
