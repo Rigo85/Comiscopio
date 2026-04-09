@@ -353,7 +353,7 @@ export class NativeWorkerBridge {
     return fs.existsSync(p) ? p : null;
   }
 
-  /** Detect backend from file extension */
+  /** Detect backend by magic bytes first, then fall back to file extension. */
   private detectBackend(filePath: string): string {
     const magic = this.detectBackendByMagic(filePath);
     if (magic) return magic;
@@ -363,6 +363,7 @@ export class NativeWorkerBridge {
     if (ext === '.cbz' || ext === '.zip') return 'zip';
     if (ext === '.cb7' || ext === '.7z') return '7z';
     if (ext === '.cbt' || ext === '.tar' || ext === '.tgz') return 'tar';
+    if (ext === '.cba' || ext === '.ace') return 'ace';
     return 'rar'; // default fallback
   }
 
@@ -373,7 +374,7 @@ export class NativeWorkerBridge {
 
       const fd = fs.openSync(filePath, 'r');
       try {
-        const header = Buffer.alloc(262);
+        const header = Buffer.alloc(512);
         const bytesRead = fs.readSync(fd, header, 0, header.length, 0);
         // RAR v4/v5: 0x526172211A07
         if (bytesRead >= 7) {
@@ -395,6 +396,15 @@ export class NativeWorkerBridge {
           const sevenz = Buffer.from([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c]);
           if (header.subarray(0, 6).equals(sevenz)) {
             return '7z';
+          }
+        }
+        // ACE: official UnAce code scans for "**ACE**" within the first 512 bytes.
+        if (bytesRead >= 7) {
+          const ace = Buffer.from('**ACE**', 'ascii');
+          for (let offset = 0; offset <= bytesRead - ace.length; offset++) {
+            if (header.subarray(offset, offset + ace.length).equals(ace)) {
+              return 'ace';
+            }
           }
         }
         // TAR: "ustar" at offset 257

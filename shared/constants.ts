@@ -17,6 +17,8 @@ export const ARCHIVE_EXTENSIONS: Record<string, string> = {
   '.cbt': 'cbt',
   '.tar': 'cbt',
   '.tgz': 'cbt',
+  '.cba': 'ace',
+  '.ace': 'ace',
   '.pdf': 'pdf',
   '.djvu': 'djvu',
   '.djv': 'djvu',
@@ -28,7 +30,7 @@ export const ARCHIVE_EXTENSIONS: Record<string, string> = {
 export const FILE_FILTERS = [
   {
     name: 'Comics',
-    extensions: ['cbz', 'cbr', 'cb7', 'cbt', 'zip', 'rar', '7z', 'tar', 'tgz', 'pdf', 'djvu', 'djv', 'epub', 'xps'],
+    extensions: ['cbz', 'cbr', 'cb7', 'cbt', 'cba', 'ace', 'zip', 'rar', '7z', 'tar', 'tgz', 'pdf', 'djvu', 'djv', 'epub', 'xps'],
   },
   {
     name: 'All Files',

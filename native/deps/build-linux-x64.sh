@@ -1,8 +1,8 @@
 #!/bin/bash
-# Builds both native workers for Linux x64 inside an Ubuntu 22.04 Docker container.
+# Builds the native workers and ACE helper for Linux x64 inside an Ubuntu 22.04 Docker container.
 #
 # Output: native/vendor/linux-x64/
-#   bin/  — comiscopio-worker, comiscopio-doc-worker  (RPATH set)
+#   bin/  — comiscopio-worker, comiscopio-ace-helper, comiscopio-unace, comiscopio-doc-worker  (RPATH set)
 #   lib/  — all bundled .so dependencies
 #
 # Usage:

@@ -52,7 +52,7 @@ install_lib() {
 }
 
 echo "Collecting dynamic dependencies..."
-for binary in "$BIN_DIR"/comiscopio-worker "$BIN_DIR"/comiscopio-doc-worker; do
+for binary in "$BIN_DIR"/comiscopio-worker "$BIN_DIR"/comiscopio-ace-helper "$BIN_DIR"/comiscopio-unace "$BIN_DIR"/comiscopio-doc-worker; do
     [ -f "$binary" ] || continue
     echo "  $(basename "$binary")"
     while IFS= read -r lib_path; do
@@ -64,7 +64,7 @@ done
 
 echo ""
 echo "Setting RPATH on binaries (\$ORIGIN/../lib)..."
-for binary in "$BIN_DIR"/comiscopio-worker "$BIN_DIR"/comiscopio-doc-worker; do
+for binary in "$BIN_DIR"/comiscopio-worker "$BIN_DIR"/comiscopio-ace-helper "$BIN_DIR"/comiscopio-unace "$BIN_DIR"/comiscopio-doc-worker; do
     [ -f "$binary" ] || continue
     patchelf --set-rpath '$ORIGIN/../lib' "$binary"
     echo "  $(basename "$binary")"

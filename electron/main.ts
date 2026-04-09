@@ -587,7 +587,7 @@ function installDesktopIntegration(): void {
       `Icon=${iconDest}`,
       'Type=Application',
       'Categories=Graphics;Viewer;',
-      'MimeType=application/x-cbz;application/x-cbr;application/x-cb7;application/x-cbt;application/pdf;image/vnd.djvu;application/epub+zip;application/vnd.ms-xpsdocument;',
+      'MimeType=application/x-cbz;application/x-cbr;application/x-cb7;application/x-cbt;application/x-cba;application/x-ace-compressed;application/pdf;image/vnd.djvu;application/epub+zip;application/vnd.ms-xpsdocument;',
       'StartupWMClass=Comiscopio',
       'Terminal=false',
       '',

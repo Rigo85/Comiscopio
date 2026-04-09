@@ -82,6 +82,7 @@ extern std::unique_ptr<ArchiveBackend> createRarBackend();
 extern std::unique_ptr<ArchiveBackend> createZipBackend();
 extern std::unique_ptr<ArchiveBackend> createSevenZBackend();
 extern std::unique_ptr<ArchiveBackend> createTarBackend();
+extern std::unique_ptr<ArchiveBackend> createAceBackend();
 
 static std::string getExtension(const std::string& filename) {
     auto pos = filename.rfind('.');
@@ -305,7 +306,7 @@ int main(int argc, char* argv[]) {
         logDiagnostic("error", "worker", "input_not_found", "input=%s", json(args.input).dump().c_str());
         return 1;
     }
-    if (args.backend != "rar" && args.backend != "zip" && args.backend != "7z" && args.backend != "tar") {
+    if (args.backend != "ace" && args.backend != "rar" && args.backend != "zip" && args.backend != "7z" && args.backend != "tar") {
         logDiagnostic("error", "worker", "unsupported_backend", "backend=%s", json(args.backend).dump().c_str());
         return 1;
     }
@@ -521,7 +522,8 @@ int main(int argc, char* argv[]) {
     std::string previewRawPath;
     {
         std::unique_ptr<ArchiveBackend> previewBackend;
-        if (args.backend == "rar") previewBackend = createRarBackend();
+        if (args.backend == "ace") previewBackend = createAceBackend();
+        else if (args.backend == "rar") previewBackend = createRarBackend();
         else if (args.backend == "zip") previewBackend = createZipBackend();
         else if (args.backend == "7z") previewBackend = createSevenZBackend();
         else if (args.backend == "tar") previewBackend = createTarBackend();
@@ -544,7 +546,8 @@ int main(int argc, char* argv[]) {
 
     // === Phase 1: Extract all entries to raw/ (single sequential scan) ===
     std::unique_ptr<ArchiveBackend> backend;
-    if (args.backend == "rar") backend = createRarBackend();
+    if (args.backend == "ace") backend = createAceBackend();
+    else if (args.backend == "rar") backend = createRarBackend();
     else if (args.backend == "zip") backend = createZipBackend();
     else if (args.backend == "7z") backend = createSevenZBackend();
     else if (args.backend == "tar") backend = createTarBackend();

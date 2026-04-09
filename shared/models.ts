@@ -8,7 +8,7 @@ export type FitMode = 'fit-width' | 'fit-height' | 'fit-page' | 'original';
 export type PageLayout = 'single' | 'double';
 
 /** Supported archive formats */
-export type ArchiveFormat = 'cbz' | 'cbr' | 'cb7' | 'pdf' | 'folder';
+export type ArchiveFormat = 'cbz' | 'cbr' | 'cb7' | 'ace' | 'pdf' | 'folder';
 
 /** Reading progress for a file */
 export interface ReadingProgress {

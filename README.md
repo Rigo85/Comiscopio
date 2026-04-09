@@ -34,6 +34,7 @@ Visor de cómics y manga para escritorio. Soporta archivos comprimidos (CBZ, CBR
 | Comic RAR | `.cbr`, `.rar` | libunrar |
 | Comic 7-Zip | `.cb7`, `.7z` | 7-Zip SDK |
 | Comic TAR | `.cbt`, `.tar`, `.tgz` | libarchive |
+| Comic ACE | `.cba`, `.ace` | ACE helper (`unace-nonfree`) |
 | PDF | `.pdf` | MuPDF |
 | EPUB | `.epub` | MuPDF |
 | DjVu | `.djvu`, `.djv` | MuPDF |
@@ -339,6 +340,7 @@ Las dependencias de terceros tienen sus propias licencias:
 |---|---|---|
 | [MuPDF](https://mupdf.com) (Artifex) | AGPL-3.0 | Licencia dual; se usa la rama open source, compatible con AGPL-3.0 |
 | [libunrar](https://www.rarlab.com/rar_add.htm) | Freeware propietario | Solo descompresión; redistribución sin modificación permitida; no compatible con GPL |
+| [unace-nonfree (vendorizado)](https://packages.debian.org/source/sid/unace-nonfree) | Public UnAce Licence | Solo descompresión; integrado como helper separado para ACE; parches locales documentados en [`README.comiscopio`](native/ace-helper/third_party/unace-nonfree/README.comiscopio.md) |
 | [libvips](https://www.libvips.org) | LGPL-2.1-or-later | |
 | [libarchive](https://www.libarchive.org) | BSD-2-Clause | |
 | [Electron](https://www.electronjs.org) | MIT | |
@@ -349,6 +351,8 @@ Las dependencias de terceros tienen sus propias licencias:
 **MuPDF:** Artifex ofrece MuPDF bajo licencia dual (AGPL-3.0 u comercial). Comiscopio usa la rama AGPL-3.0. Si deseas integrar Comiscopio en un producto propietario, necesitarás adquirir una licencia comercial de Artifex.
 
 **libunrar:** La licencia de UnRAR permite descompresión libre pero prohíbe crear software de compresión RAR y es incompatible con GPL. Por este motivo algunas distribuciones (Fedora, Debian main) no incluyen libunrar en sus repositorios oficiales.
+
+**unace-nonfree:** Comiscopio usa una copia vendorizada y parcheada del paquete fuente Debian `unace-nonfree` para soportar archivos `ace/cba`. El decoder ACE corre como helper separado y se usa solo para descompresión. El origen del snapshot, la licencia y los parches locales que deben conservarse al actualizarlo están documentados en [`native/ace-helper/third_party/unace-nonfree/README.comiscopio.md`](native/ace-helper/third_party/unace-nonfree/README.comiscopio.md).
 
 ---
 

@@ -10,10 +10,11 @@ mkdir -p "$VENDOR/bin"
 
 # Always start from a clean release build to avoid stale CMake cache issues
 rm -rf "$NATIVE/worker/build-release"
+rm -rf "$NATIVE/ace-helper/build-release"
 rm -rf "$NATIVE/doc-worker/build-release"
 # Remove any accidental in-source CMake artifacts
-rm -f "$NATIVE/worker/CMakeCache.txt"   "$NATIVE/doc-worker/CMakeCache.txt"
-rm -rf "$NATIVE/worker/CMakeFiles"      "$NATIVE/doc-worker/CMakeFiles"
+rm -f "$NATIVE/worker/CMakeCache.txt"   "$NATIVE/ace-helper/CMakeCache.txt"   "$NATIVE/doc-worker/CMakeCache.txt"
+rm -rf "$NATIVE/worker/CMakeFiles"      "$NATIVE/ace-helper/CMakeFiles"      "$NATIVE/doc-worker/CMakeFiles"
 
 echo "==================================================================="
 echo " Building comiscopio-worker  (archive: CBZ/CBR/CB7/TAR)"
@@ -25,6 +26,18 @@ cmake -B "$NATIVE/worker/build-release" \
 cmake --build "$NATIVE/worker/build-release" -j"$(nproc)"
 cp "$NATIVE/worker/build-release/comiscopio-worker" "$VENDOR/bin/"
 echo "OK: comiscopio-worker"
+
+echo ""
+echo "==================================================================="
+echo " Building comiscopio-ace-helper  (archive: ACE/CBA)"
+echo "==================================================================="
+cmake -B "$NATIVE/ace-helper/build-release" \
+      -S "$NATIVE/ace-helper" \
+      -DCMAKE_BUILD_TYPE=Release
+cmake --build "$NATIVE/ace-helper/build-release" -j"$(nproc)"
+cp "$NATIVE/ace-helper/build-release/comiscopio-ace-helper" "$VENDOR/bin/"
+cp "$NATIVE/ace-helper/build-release/comiscopio-unace" "$VENDOR/bin/"
+echo "OK: comiscopio-ace-helper"
 
 echo ""
 echo "==================================================================="

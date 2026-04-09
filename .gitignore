@@ -9,6 +9,7 @@
 /release
 /native/worker/build*/
 /native/doc-worker/build*/
+/native/ace-helper/build*/
 /native/vendor/
 
 # Node
@@ -69,3 +70,4 @@ docs/img*.png
 test-funcionales.md
 ejecutar-tests.md
 prueba-ejececion-test-funcionales*.txt
+plan-*

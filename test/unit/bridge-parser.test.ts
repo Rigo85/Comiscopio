@@ -75,6 +75,18 @@ describe('detectBackendByMagic', () => {
     expect(result).toBe('7z');
   });
 
+  it('detects ACE from magic bytes even when the extension is .cbr', () => {
+    const tmp = path.join(FIXTURES, '_tmp_ace_fake_cbr.cbr');
+    const buf = Buffer.alloc(512);
+    Buffer.from('**ACE**', 'ascii').copy(buf, 7);
+    fs.writeFileSync(tmp, buf);
+    try {
+      expect((bridge as any).detectBackendByMagic(tmp)).toBe('ace');
+    } finally {
+      fs.unlinkSync(tmp);
+    }
+  });
+
   it('detects TAR from .cbt fixture', () => {
     const result = (bridge as any).detectBackendByMagic(path.join(FIXTURES, 'test-5pages.cbt'));
     expect(result).toBe('tar');

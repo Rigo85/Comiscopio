@@ -40,6 +40,7 @@ set(SOURCES
     src/app/main.cpp
     src/app/work_queue.cpp
     src/archive/archive_entry_utils.cpp
+    src/archive/ace_backend.cpp
     src/archive/libarchive_base.cpp
     src/archive/rar_backend.cpp
     src/archive/zip_backend.cpp
