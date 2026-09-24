@@ -1,10 +1,9 @@
 # Revisión final para Comiscopio 0.3.0
 
-Estado de preparación local del 23–24 de septiembre de 2026. Tras completar las
-pruebas locales, el usuario autorizó continuar con commit, push y validación en
-GitHub Actions. El tag y la publicación siguen pendientes de autorización.
-Las notas del futuro release están preparadas
-en [v0.3.0](releases/v0.3.0.md); su existencia no significa que se haya publicado.
+Preparación, validación y publicación del 23–24 de septiembre de 2026.
+Después de las pruebas locales y de GitHub Actions, el usuario autorizó
+expresamente el tag y la publicación. [Comiscopio 0.3.0 está publicado](https://github.com/Rigo85/Comiscopio/releases/tag/v0.3.0),
+con [notas de versión](releases/v0.3.0.md) y cuatro paquetes verificados.
 
 ## Decisiones y trazabilidad
 
@@ -52,13 +51,44 @@ La [ejecución 35953364173 de GitHub Actions](https://github.com/Rigo85/Comiscop
 terminó con éxito: Linux en 12 min 25 s y Windows en 13 min 38 s. Ambos jobs
 compilaron desde fuentes, ejecutaron sus pruebas y guardaron los paquetes y
 diagnósticos. El job `release` se omitió porque la ejecución vino de un push
-de rama. El último release publicado sigue siendo `v0.2.0`.
+de rama. En ese momento el último release publicado era `v0.2.0`.
 
 Se descargaron los diagnósticos a `test-results/ci/35953364173/`. El control
 del portable Windows registró 20.311 ms hasta la primera imagen y cierre
 correcto; este resultado en `windows-2022` no determina la causa de las demoras
 locales ni reemplaza la ronda manual Windows 10/11. La comprobación del tag
-y la publicación no se ejecutaron en esta pasada.
+y la publicación no se ejecutaron en esa primera pasada.
+
+### Publicación autorizada de v0.3.0
+
+El tag anotado `v0.3.0` apunta al mismo commit probado, `8e3b6cb`; el commit
+posterior `09cd5c4` solo registraba el resultado de CI en la documentación.
+La [ejecución del tag, 35955995838](https://github.com/Rigo85/Comiscopio/actions/runs/35955995838),
+volvió a compilar y probar todo: Linux aprobó en 12 min 13 s, Windows en
+13 min 6 s y publicación en 43 s. Esta vez ambos controles de versión del
+tag se ejecutaron y aprobaron. El release es público, estable y no es borrador.
+
+Se descargaron los cuatro paquetes desde el release y se contrastaron sus
+SHA-256. GitHub sustituyó el espacio del nombre del portable por un punto;
+el listado original conservaba el espacio. Se corrigieron `SHA256SUMS.txt`
+y las notas publicadas para usar `Comiscopio.0.3.0.exe`, manteniendo intactos
+los binarios. El workflow de `master` ahora cambia los espacios por puntos
+antes de calcular hashes y subir los archivos. Esta corrección posterior se
+validó con `actionlint` y ejecutando su bloque de nombres/hashes con archivos
+temporales; no se altera el tag publicado ni se atribuye esa corrección al
+workflow original del tag.
+
+| Descarga publicada | SHA-256 |
+| --- | --- |
+| `Comiscopio-0.3.0.AppImage` | `3ea6cb8e4c03ad9b6e67cae49f49c4f51078594bdfa9bcae13df8ad2381db0cd` |
+| `comiscopio-0.3.0.tar.gz` | `781f95c69043420b07968e83cb8ae3b72aad9e48fa4baecb9689dfb1b08a04fe` |
+| `Comiscopio.0.3.0.exe` | `4d817cc017a68d75dd93717f9bc2e179e915ec7bf87f88f38db3c7a98931319e` |
+| `Comiscopio-0.3.0-win.zip` | `69bbaf3884a91e1ff7b74f013372fd7898ccb469d10fd392a685148b5723241b` |
+
+Estos hashes corresponden a la compilación de publicación en GitHub y no
+sustituyen los de los builds locales anteriores. Descargas verificadas en
+`release/0.3.0-published/`; informes y evidencia en
+`test-results/ci/35955995838/`.
 
 ## Observaciones conservadas
 
@@ -97,7 +127,7 @@ Controles finales ya completados:
 Los hashes y los intentos previos están en los registros de validación de cada
 plataforma. Los paquetes finales locales están en `release/0.3.0-linux/` y
 `release/0.3.0-windows/`, cada uno con su `SHA256SUMS.txt`. La preparación y las
-pruebas locales de esta etapa terminaron, y la ejecución real del workflow en
-GitHub también pasó. Publicar requiere autorización separada. La lentitud
-Windows y las simplificaciones menores quedan documentadas
-y diferidas por decisión del usuario.
+pruebas locales de esta etapa terminaron, y las ejecuciones del workflow de rama
+y de publicación en GitHub también pasaron. El release 0.3.0 quedó publicado
+con autorización. La lentitud Windows y las simplificaciones menores quedan
+documentadas y diferidas por decisión del usuario.

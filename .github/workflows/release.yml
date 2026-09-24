@@ -155,5 +155,14 @@ jobs:
           notes="$GITHUB_WORKSPACE/docs/releases/$RELEASE_TAG.md"
           test -f "$notes"
           cd artifacts
+          # GitHub replaces spaces in uploaded asset names with periods.
+          # Rename first so SHA256SUMS also matches the downloaded filenames.
+          for file in ./*; do
+            uploaded_name="${file// /.}"
+            if [[ "$file" != "$uploaded_name" ]]; then
+              test ! -e "$uploaded_name"
+              mv -- "$file" "$uploaded_name"
+            fi
+          done
           sha256sum ./* > SHA256SUMS.txt
           gh release create "$RELEASE_TAG" ./* --verify-tag --notes-file "$notes" --title "Comiscopio $RELEASE_TAG"

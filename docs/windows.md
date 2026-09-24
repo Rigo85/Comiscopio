@@ -2,7 +2,8 @@
 
 Objetivo: Windows 10 22H2 y Windows 11, x64, portable `.exe` y `.zip`.
 La ronda manual por formatos está completada en ambos sistemas. La versión
-0.3.0 está en preparación; el estado de los paquetes, controles automáticos y
+[0.3.0 está publicada](https://github.com/Rigo85/Comiscopio/releases/tag/v0.3.0);
+el estado de los paquetes, controles automáticos y
 observaciones está en la [validación Windows](validacion-windows-2026-09.md)
 y la [revisión final](revision-final-0.3.0.md).
 
