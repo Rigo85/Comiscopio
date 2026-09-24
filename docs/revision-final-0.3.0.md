@@ -47,9 +47,18 @@ Se actualizó la descripción pública del repositorio y se añadieron los topic
 `pdf`, `epub`, `cbz` y `cbr`. Se revisaron las etiquetas de issues existentes;
 se conservaron las categorías estándar, sin crear duplicados ni issues.
 
-La subida de los cambios está autorizada; la ejecución del workflow actualizado
-en GitHub es el siguiente control. La validación local no se presenta como una
-ejecución CI.
+El commit `8e3b6cb928347a5ce2399c08e53f483228863676` se subió a `master`.
+La [ejecución 35953364173 de GitHub Actions](https://github.com/Rigo85/Comiscopio/actions/runs/35953364173)
+terminó con éxito: Linux en 12 min 25 s y Windows en 13 min 38 s. Ambos jobs
+compilaron desde fuentes, ejecutaron sus pruebas y guardaron los paquetes y
+diagnósticos. El job `release` se omitió porque la ejecución vino de un push
+de rama. El último release publicado sigue siendo `v0.2.0`.
+
+Se descargaron los diagnósticos a `test-results/ci/35953364173/`. El control
+del portable Windows registró 20.311 ms hasta la primera imagen y cierre
+correcto; este resultado en `windows-2022` no determina la causa de las demoras
+locales ni reemplaza la ronda manual Windows 10/11. La comprobación del tag
+y la publicación no se ejecutaron en esta pasada.
 
 ## Observaciones conservadas
 
@@ -88,7 +97,7 @@ Controles finales ya completados:
 Los hashes y los intentos previos están en los registros de validación de cada
 plataforma. Los paquetes finales locales están en `release/0.3.0-linux/` y
 `release/0.3.0-windows/`, cada uno con su `SHA256SUMS.txt`. La preparación y las
-pruebas locales de esta etapa terminaron. Queda ejecutar el workflow en GitHub
-con la subida autorizada de los cambios; publicar requiere autorización
-separada. La lentitud Windows y las simplificaciones menores quedan documentadas
+pruebas locales de esta etapa terminaron, y la ejecución real del workflow en
+GitHub también pasó. Publicar requiere autorización separada. La lentitud
+Windows y las simplificaciones menores quedan documentadas
 y diferidas por decisión del usuario.

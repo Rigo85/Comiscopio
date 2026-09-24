@@ -6,7 +6,7 @@ Visor de cómics y manga para escritorio. Lee archivos comprimidos (CBZ, CBR, CB
 [![Platform: Linux](https://img.shields.io/badge/Platform-Linux-lightgrey.svg)](#)
 [![Platform: Windows](https://img.shields.io/badge/Platform-Windows-lightgrey.svg)](#)
 
-**Versión en preparación: 0.3.0.** Completadas las rondas manuales y las pruebas locales de los paquetes en Linux y Windows 10/11 x64. Queda ejecutar el workflow actualizado en GitHub; no se ha aprobado publicar. Consulta la [revisión final](docs/revision-final-0.3.0.md) y las [notas preparadas](docs/releases/v0.3.0.md).
+**Versión en preparación: 0.3.0.** Completadas las rondas manuales y las pruebas locales en Linux y Windows 10/11 x64. La [compilación y validación de paquetes en GitHub Actions](https://github.com/Rigo85/Comiscopio/actions/runs/35953364173) también pasó para Linux y Windows; no se ha aprobado publicar. Consulta la [revisión final](docs/revision-final-0.3.0.md) y las [notas preparadas](docs/releases/v0.3.0.md).
 
 ![Comiscopio leyendo un cómic](docs/screenshot-comic.png)
 
@@ -110,7 +110,7 @@ No necesitas instalar Node.js ni MSYS2 para usar esos paquetes. En las VM de
 prueba se observaron algunos arranques lentos; la causa sigue sin determinarse.
 Consulta las [observaciones de Windows](docs/validacion-windows-2026-09.md).
 
-Los nombres anteriores corresponden a los paquetes 0.3.0 preparados localmente;
+Los nombres anteriores corresponden a los paquetes 0.3.0 validados localmente y en CI;
 esa versión todavía no está publicada. Las versiones publicadas están en
 [GitHub Releases](https://github.com/Rigo85/Comiscopio/releases).
 
@@ -269,9 +269,10 @@ ejecutable se contrasta con `package.json`.
 Los informes se conservan incluso al fallar. Solo un push de tag que coincida
 con la versión puede publicar, y necesita éxito de ambos jobs; usa las notas
 de `docs/releases/<tag>.md` y genera SHA-256 de los paquetes probados. PR, push
-de rama y ejecución manual prueban sin publicar. La ejecución del workflow
-actualizado en GitHub es el siguiente control tras las pruebas locales;
-el tag y la publicación siguen pendientes de autorización.
+de rama y ejecución manual prueban sin publicar. El workflow actualizado pasó
+en [la ejecución del commit `8e3b6cb`](https://github.com/Rigo85/Comiscopio/actions/runs/35953364173),
+con artefactos y diagnósticos de ambos sistemas. El tag y la publicación siguen
+pendientes de autorización.
 
 La revisión manual se hace de un formato a la vez: abrir, navegar, probar
 miniaturas, saltar al final/inicio, revisar logs y recién continuar al siguiente.
