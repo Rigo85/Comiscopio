@@ -1,0 +1,27 @@
+# Some transitive .pc files contain absolute MSYS include paths. CMake enables
+# PKG_CONFIG_ALLOW_SYSTEM_CFLAGS, exposing paths normally filtered by pkgconf.
+# Native Windows compilers require the corresponding drive-qualified paths.
+function(comiscopio_normalize_msys_target target)
+    if(NOT WIN32)
+        return()
+    endif()
+    get_filename_component(_pkg_bin "${PKG_CONFIG_EXECUTABLE}" DIRECTORY)
+    get_filename_component(_native_prefix "${_pkg_bin}/.." ABSOLUTE)
+    get_filename_component(_prefix_name "${_native_prefix}" NAME)
+    foreach(_property INTERFACE_INCLUDE_DIRECTORIES INTERFACE_LINK_DIRECTORIES
+                      INTERFACE_COMPILE_OPTIONS INTERFACE_LINK_OPTIONS)
+        get_target_property(_values ${target} ${_property})
+        if(_values)
+            set(_normalized)
+            foreach(_value IN LISTS _values)
+                if(_value MATCHES "^/${_prefix_name}/")
+                    string(REGEX REPLACE "^/${_prefix_name}/" "${_native_prefix}/" _value "${_value}")
+                elseif(_value MATCHES "^(-I|-L)/${_prefix_name}/")
+                    string(REGEX REPLACE "^(-I|-L)/${_prefix_name}/" "\\1${_native_prefix}/" _value "${_value}")
+                endif()
+                list(APPEND _normalized "${_value}")
+            endforeach()
+            set_property(TARGET ${target} PROPERTY ${_property} "${_normalized}")
+        endif()
+    endforeach()
+endfunction()

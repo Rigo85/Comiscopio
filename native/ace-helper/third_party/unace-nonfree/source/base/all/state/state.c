@@ -1,4 +1,5 @@
 #include <errno.h>
+#include "comiscopio_limits.h"
 
 #define INCL_BASE_STATE_EXCLUSIVE
 
@@ -14,6 +15,12 @@ INT     BASE_STATE_WriteFile(INT Handle, PVOID Buf, INT Len,
                              BOOL IsUncompressedSize)
 {
 INT       Wrote;
+static unsigned long long ComiscopioWritten = 0;
+unsigned long long ComiscopioBudget = comiscopio_limit("COMISCOPIO_UNACE_MAX_OUTPUT_BYTES");
+
+  if (Len < 0 || ComiscopioWritten > ComiscopioBudget ||
+      (unsigned long long)Len > ComiscopioBudget - ComiscopioWritten)
+    comiscopio_limit_failure("output_bytes");
 
   if (Len)
   {
@@ -23,6 +30,7 @@ INT       Wrote;
 
   errno = 0;
   Wrote = write(Handle, Buf, Len);
+  if (Wrote > 0) ComiscopioWritten += (unsigned long long)Wrote;
 
   if ((Wrote != Len) || errno)
   {

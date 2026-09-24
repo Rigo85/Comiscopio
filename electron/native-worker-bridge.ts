@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as readline from 'readline';
 import { getTempDir } from '../shared/constants';
 import { app } from 'electron';
+import { randomUUID } from 'crypto';
 
 /** Events emitted by the worker, parsed from JSON-lines stdout */
 export interface WorkerEvent {
@@ -35,13 +36,16 @@ type ArtifactVariant = 'optimized' | 'original';
  * 3. Worker emits "archive" → extraction done, ready for focus
  * 4. focus(page) → sends focus command to worker stdin
  * 5. Worker emits "ready" → page artifacts available on disk
- * 6. closeSession() → SIGTERM + cleanup
+ * 6. closeSession() → quit command, forced termination if needed, cleanup
  */
 export class NativeWorkerBridge {
   private sessions = new Map<string, WorkerSession>();
+  private pendingWorkers = new Set<Promise<void>>();
+  private pendingCleanup = new Set<Promise<void>>();
 
   /** Check if a file is a document format (PDF, DjVu, EPUB, XPS) vs archive */
   private isDocumentFormat(filePath: string): boolean {
+    if (fs.existsSync(filePath) && fs.statSync(filePath).isDirectory()) return false;
     const ext = path.extname(filePath).toLowerCase();
     return ['.pdf', '.djvu', '.djv', '.epub', '.xps'].includes(ext);
   }
@@ -68,12 +72,13 @@ export class NativeWorkerBridge {
         if (fs.existsSync(p)) return p;
       }
     }
-    // Dev mode: vendor release build first, then local cmake build dirs
+    // Development must run the binaries just built, not a stale release bundle.
     const vendorPlatform = `${process.platform}-${process.arch}`;
     const devCandidates = [
-      path.join(__dirname, '..', '..', 'native', 'vendor', vendorPlatform, 'bin', executable),
       path.join(__dirname, '..', '..', 'native', buildDir, 'build', executable),
+      path.join(__dirname, '..', '..', 'native', buildDir, 'build', 'Release', executable),
       path.join(__dirname, '..', '..', 'native', buildDir, 'build-debug', executable),
+      path.join(__dirname, '..', '..', 'native', 'vendor', vendorPlatform, 'bin', executable),
     ];
     for (const p of devCandidates) {
       if (fs.existsSync(p)) return p;
@@ -91,9 +96,8 @@ export class NativeWorkerBridge {
       libDirs.add(path.join(process.resourcesPath, 'native', 'lib'));
       libDirs.add(path.join(path.dirname(app.getPath('exe')), 'native', 'lib'));
     } else {
-      // Dev: vendor release libs, then sibling lib/ next to binary
-      const vendorPlatform = `${process.platform}-${process.arch}`;
-      libDirs.add(path.join(__dirname, '..', '..', 'native', 'vendor', vendorPlatform, 'lib'));
+      // Only add libraries belonging to the selected binary.
+      libDirs.add(path.join(path.dirname(binaryPath), '..', 'lib'));
       libDirs.add(path.join(path.dirname(binaryPath), 'lib'));
     }
 
@@ -139,7 +143,7 @@ export class NativeWorkerBridge {
     // Close existing session for this hash if any
     this.closeSession(fileHash);
 
-    const outputDir = path.join(getTempDir(), fileHash);
+    const outputDir = path.join(getTempDir(), `${fileHash}-${randomUUID()}`);
     const session: WorkerSession = {
       fileHash,
       filePath,
@@ -180,11 +184,20 @@ export class NativeWorkerBridge {
     const proc = spawn(binaryPath, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: this.getWorkerEnv(binaryPath),
+      windowsHide: true,
     });
 
     session.process = proc;
+    // Writes can race a worker crash. Handle EPIPE so it cannot crash Electron;
+    // the process error/exit handlers report the actual failure to the reader.
+    proc.stdin!.on('error', (error: NodeJS.ErrnoException) => {
+      if (!session.cancelled && error.code !== 'EPIPE') {
+        console.warn('Worker input failed:', error.message);
+      }
+    });
 
     // Parse JSON-lines from stdout
+    let reportedFatalError = false;
     const rl = readline.createInterface({ input: proc.stdout! });
     rl.on('line', (line) => {
       if (session.cancelled) return;
@@ -198,6 +211,7 @@ export class NativeWorkerBridge {
             // Archive opened successfully but contains no recognized image entries
             // (e.g. a TAR of CBR files). Rewrite as an error so the viewer shows
             // a clear message instead of an empty reader.
+            reportedFatalError = true;
             listener({ type: 'error', message: 'El archivo no contiene imágenes reconocidas' });
             return;
           }
@@ -213,6 +227,7 @@ export class NativeWorkerBridge {
           session.manifest = null;
         }
 
+        if (event.type === 'error' && event.page == null) reportedFatalError = true;
         listener(event);
       } catch {
         // Not JSON — ignore
@@ -225,7 +240,8 @@ export class NativeWorkerBridge {
       console.log(line);
     });
 
-    proc.on('exit', (code) => {
+    // 'close' follows drained stdout/stderr; 'exit' can precede the final error.
+    proc.on('close', (code) => {
       rl.close();
       stderrRl.close();
       if (session.cleanupTimer) {
@@ -233,24 +249,31 @@ export class NativeWorkerBridge {
         session.cleanupTimer = null;
       }
       session.process = null;
-      // Only cleanup if this session is still the active one for this hash.
-      // A replacement session may already be in the map using the same output dir.
-      if (this.sessions.get(fileHash) === session) {
+      // Each session owns its directory, including while its successor is running.
+      // A successful exit may leave artifacts needed by the reader until close.
+      if (session.cancelled || code !== 0) {
         this.cleanupSessionArtifacts(session);
-        this.sessions.delete(fileHash);
+        if (this.sessions.get(fileHash) === session) this.sessions.delete(fileHash);
       }
-      if (!session.cancelled && code !== 0) {
+      if (!session.cancelled && code !== 0 && !reportedFatalError) {
         listener({ type: 'error', message: `Worker exited with code ${code}` });
       }
     });
 
     proc.on('error', (err) => {
       session.process = null;
+      this.cleanupSessionArtifacts(session);
+      if (this.sessions.get(fileHash) === session) this.sessions.delete(fileHash);
       if (!session.cancelled) {
         listener({ type: 'error', message: err.message });
       }
     });
 
+    // Keep track even after closeSession removes the session from the map.
+    // The earlier close handler schedules cleanup before this promise resolves.
+    const finished = new Promise<void>(resolve => proc.once('close', () => resolve()));
+    this.pendingWorkers.add(finished);
+    void finished.then(() => this.pendingWorkers.delete(finished));
     return session;
   }
 
@@ -269,11 +292,15 @@ export class NativeWorkerBridge {
     if (!session) return;
 
     session.cancelled = true;
+    this.sessions.delete(fileHash);
 
     if (session.process) {
-      session.process.stdin?.end();
       const proc = session.process;
-      proc.kill('SIGTERM');
+      if (proc.stdin?.writable) proc.stdin.end(JSON.stringify({ type: 'quit' }) + '\n');
+      // POSIX extraction can be blocked waiting for ACE; stdin is only read
+      // afterwards. Its signal handler cancels extraction and reaps the helper.
+      // Windows uses the stdin command and its kill-on-close Job Object.
+      if (process.platform !== 'win32') proc.kill('SIGTERM');
       session.cleanupTimer = setTimeout(() => {
         if (session.process === proc) {
           proc.kill('SIGKILL');
@@ -287,10 +314,12 @@ export class NativeWorkerBridge {
   }
 
   /** Close all sessions */
-  closeAll(): void {
+  async closeAll(): Promise<void> {
     for (const hash of Array.from(this.sessions.keys())) {
       this.closeSession(hash);
     }
+    await Promise.all(this.pendingWorkers);
+    await Promise.all(this.pendingCleanup);
   }
 
   /** Get a session by file hash */
@@ -299,9 +328,13 @@ export class NativeWorkerBridge {
   }
 
   private cleanupSessionArtifacts(session: WorkerSession): void {
-    fs.promises.rm(session.outputDir, { recursive: true, force: true }).catch(() => {
-      /* ignore cleanup errors */
+    const cleanup = fs.promises.rm(session.outputDir, {
+      recursive: true, force: true, maxRetries: 3, retryDelay: 100,
+    }).catch(error => {
+      console.warn('Could not remove worker temporary directory:', session.outputDir, error);
     });
+    this.pendingCleanup.add(cleanup);
+    void cleanup.then(() => this.pendingCleanup.delete(cleanup));
   }
 
   /** Read the manifest.json from a session's output directory (cached) */
@@ -355,6 +388,7 @@ export class NativeWorkerBridge {
 
   /** Detect backend by magic bytes first, then fall back to file extension. */
   private detectBackend(filePath: string): string {
+    if (fs.existsSync(filePath) && fs.statSync(filePath).isDirectory()) return 'folder';
     const magic = this.detectBackendByMagic(filePath);
     if (magic) return magic;
 

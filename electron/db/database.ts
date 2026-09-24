@@ -19,8 +19,8 @@ export class Database {
   settingsRepo!: SettingsRepo;
   bookmarksRepo!: BookmarksRepo;
 
-  constructor() {
-    this.configDir = getConfigDir();
+  constructor(configDir = getConfigDir()) {
+    this.configDir = configDir;
   }
 
   initialize(): void {
@@ -29,27 +29,23 @@ export class Database {
 
     try {
       this.db = new BetterSqlite3(dbPath);
+      const integrity = this.db.pragma('quick_check') as { quick_check: string }[];
+      if (integrity.length !== 1 || integrity[0].quick_check !== 'ok') {
+        throw new Error(`SQLite integrity check failed: ${JSON.stringify(integrity)}`);
+      }
       this.db.pragma('journal_mode = WAL');
       this.createTables();
-      // Quick integrity check
-      this.db.pragma('integrity_check');
     } catch (err) {
-      console.error('Database corrupted or inaccessible, recreating:', err);
+      console.error('Cannot open database; existing files have been preserved:', err);
       try { this.db?.close(); } catch { /* ignore */ }
-      // Remove corrupted DB and recreate
-      try { fs.unlinkSync(dbPath); } catch { /* ignore */ }
-      try { fs.unlinkSync(dbPath + '-wal'); } catch { /* ignore */ }
-      try { fs.unlinkSync(dbPath + '-shm'); } catch { /* ignore */ }
-      this.db = new BetterSqlite3(dbPath);
-      this.db.pragma('journal_mode = WAL');
-      this.createTables();
+      throw err;
     }
 
     this.initRepos();
   }
 
   close(): void {
-    if (this.db) {
+    if (this.db?.open) {
       this.db.close();
     }
   }

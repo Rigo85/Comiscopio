@@ -1,4 +1,11 @@
-import { Component, OnInit, OnDestroy, signal, computed } from '@angular/core';
+import {
+  Component,
+  OnInit,
+  OnDestroy,
+  signal,
+  computed,
+  ChangeDetectionStrategy,
+} from '@angular/core';
 import { ElectronService, WindowState } from '../../services/electron.service';
 
 @Component({
@@ -11,7 +18,10 @@ import { ElectronService, WindowState } from '../../services/electron.service';
           @if (isAlwaysOnTop()) {
             <span class="titlebar-badge" title="Siempre visible">
               <svg width="10" height="10" viewBox="0 0 16 16">
-                <path d="M4.5 1.5a.5.5 0 0 1 1 0V4h5V1.5a.5.5 0 0 1 1 0V4h1a.5.5 0 0 1 .5.5v2a2.5 2.5 0 0 1-2 2.45V12h1.5a.5.5 0 0 1 0 1h-4v2.5a.5.5 0 0 1-1 0V13h-4a.5.5 0 0 1 0-1H5V8.95A2.5 2.5 0 0 1 3 6.5v-2A.5.5 0 0 1 3.5 4h1V1.5z" fill="currentColor"/>
+                <path
+                  d="M4.5 1.5a.5.5 0 0 1 1 0V4h5V1.5a.5.5 0 0 1 1 0V4h1a.5.5 0 0 1 .5.5v2a2.5 2.5 0 0 1-2 2.45V12h1.5a.5.5 0 0 1 0 1h-4v2.5a.5.5 0 0 1-1 0V13h-4a.5.5 0 0 1 0-1H5V8.95A2.5 2.5 0 0 1 3 6.5v-2A.5.5 0 0 1 3.5 4h1V1.5z"
+                  fill="currentColor"
+                />
               </svg>
             </span>
           }
@@ -19,29 +29,37 @@ import { ElectronService, WindowState } from '../../services/electron.service';
         <div class="titlebar-controls">
           <button class="titlebar-btn" (click)="onMinimize()" title="Minimizar">
             <svg width="10" height="1" viewBox="0 0 10 1">
-              <rect width="10" height="1" fill="currentColor"/>
+              <rect width="10" height="1" fill="currentColor" />
             </svg>
           </button>
-          <button class="titlebar-btn" (click)="onMaximize()" [title]="isMaximized() ? 'Restaurar' : 'Maximizar'">
+          <button
+            class="titlebar-btn"
+            (click)="onMaximize()"
+            [title]="isMaximized() ? 'Restaurar' : 'Maximizar'"
+          >
             @if (isMaximized()) {
               <svg width="10" height="10" viewBox="0 0 10 10">
-                <path d="M2 0v2H0v8h8V8h2V0H2zm6 8H1V3h7v5zm1-6H3V1h6v5h-0V2z" fill="currentColor"/>
+                <path
+                  d="M2 0v2H0v8h8V8h2V0H2zm6 8H1V3h7v5zm1-6H3V1h6v5h-0V2z"
+                  fill="currentColor"
+                />
               </svg>
             } @else {
               <svg width="10" height="10" viewBox="0 0 10 10">
-                <rect width="10" height="10" fill="none" stroke="currentColor" stroke-width="1"/>
+                <rect width="10" height="10" fill="none" stroke="currentColor" stroke-width="1" />
               </svg>
             }
           </button>
           <button class="titlebar-btn titlebar-btn--close" (click)="onClose()" title="Cerrar">
             <svg width="10" height="10" viewBox="0 0 10 10">
-              <path d="M1 0L0 1l4 4-4 4 1 1 4-4 4 4 1-1-4-4 4-4-1-1-4 4z" fill="currentColor"/>
+              <path d="M1 0L0 1l4 4-4 4 1 1 4-4 4 4 1-1-4-4 4-4-1-1-4 4z" fill="currentColor" />
             </svg>
           </button>
         </div>
       </div>
     }
   `,
+  changeDetection: ChangeDetectionStrategy.Eager,
   styles: `
     .titlebar {
       display: flex;

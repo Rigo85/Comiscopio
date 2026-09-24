@@ -1,34 +1,17 @@
-FROM ubuntu:22.04
-
+ARG UBUNTU_IMAGE=ubuntu:22.04
+FROM ${UBUNTU_IMAGE}
 ENV DEBIAN_FRONTEND=noninteractive
-
-# Enable universe + multiverse repos (libmupdf-dev is in universe, libunrar-dev in multiverse)
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends software-properties-common ca-certificates && \
-    add-apt-repository universe && \
-    add-apt-repository multiverse && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends \
-        # Build tools
-        build-essential \
-        cmake \
-        pkg-config \
-        patchelf \
-        # Dynamic deps — bundled at package time via ldd
-        libvips-dev \
-        libarchive-dev \
-        # Static deps — linked directly into binaries
-        libunrar-dev \
-        libmupdf-dev \
-        libjbig2dec0-dev \
-        libgumbo-dev \
-        libmujs-dev \
-        # MuPDF transitive dynamic deps (bundled via ldd)
-        libfreetype-dev \
-        libharfbuzz-dev \
-        libopenjp2-7-dev \
-        libjpeg-dev \
-        zlib1g-dev \
-        # nlohmann/json (header-only)
-        nlohmann-json3-dev \
+# Increment/rebuild this layer to refresh Ubuntu security packages independently
+# of the pinned reader source versions. The output records actual apt versions.
+ARG APT_REFRESH=2026-09-23
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+    ca-certificates curl xz-utils build-essential cmake pkg-config patchelf \
+    meson ninja-build python3 \
+    libglib2.0-dev libexpat1-dev libjpeg-dev libpng-dev libwebp-dev libtiff-dev \
+    libheif-dev libopenjp2-7-dev libmagickwand-dev liblcms2-dev libexif-dev \
+    liborc-0.4-dev zlib1g-dev libbz2-dev liblzma-dev libzstd-dev liblz4-dev \
+    libssl-dev libxml2-dev \
     && rm -rf /var/lib/apt/lists/*
+COPY versions.env _build-reader-deps.sh /opt/comiscopio-build/
+RUN bash /opt/comiscopio-build/_build-reader-deps.sh
+ENV PKG_CONFIG_PATH=/usr/local/lib/pkgconfig

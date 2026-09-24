@@ -1,157 +1,159 @@
-name: Build & Release
+name: Build, Test & Release
 
 on:
+  pull_request:
   push:
-    tags:
-      - 'v*'
+    branches: [master]
+    tags: ['v*']
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
-  # ── 1. Unit tests ────────────────────────────────────────────────────────────
-  # Fast: vitest only, no native workers needed.
-  test-unit:
-    runs-on: ubuntu-latest
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
-
-      - name: Install dependencies
-        run: npm install
-
-      - name: Run unit tests
-        run: npm run test:unit
-
-  # ── 2. Build Linux ───────────────────────────────────────────────────────────
-  # Blocked by unit tests. Produces two artifacts:
-  #   linux-builds  — AppImage + tar.gz  (for the release job)
-  #   linux-native  — native workers only (for the functional test job)
-  build-linux:
-    needs: [test-unit]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-
-      - name: Install dependencies
-        run: npm install
-
-      # Builds native workers inside a Docker Ubuntu 22.04 container (glibc 2.35 / GCC 11)
-      # to avoid glibc 2.38 symbol contamination from the ubuntu-latest runner (GCC 14).
-      # Bundles all shared library dependencies with patchelf so the AppImage is self-contained.
-      - name: Build native workers (Docker)
-        run: npm run build:native-linux
-
-      - name: Build Angular + Electron
-        run: npm run build:app
-
-      - name: Package Linux
-        run: NODE_NO_WARNINGS=1 npx electron-builder --linux
+          node-version: 24.18.1
+          cache: npm
+      - run: npm ci
+      - run: node scripts/prepare-ace-fixture.cjs
+      - name: Check release version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: node scripts/check-release-version.cjs
+      - run: npm run build:app
+      - run: npm run test:unit
+      - run: node scripts/test-database.cjs
+      - name: Build portable native readers (Ubuntu 22.04 ABI)
+        run: npm run build:portable
+      - name: Test bundled readers
+        run: |
+          npm run test:workers
+          npm run test:workers:portable
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload release artifacts
-        uses: actions/upload-artifact@v4
+          COMISCOPIO_NATIVE_DIR: native/vendor/linux-x64
+      - name: Package without publishing
+        run: npx electron-builder --linux --publish never
+      - name: Test packaged application
+        run: xvfb-run --auto-servernum npm run test:packaged
+        env:
+          COMISCOPIO_APP_BINARY: release/linux-unpacked/comiscopio
+      - name: Test AppImage and extracted tar archive
+        run: xvfb-run --auto-servernum npm run test:linux-artifacts
+      - name: Preserve test diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-test-reports
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Upload validated builds
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: linux-builds
           path: |
             release/*.AppImage
             release/*.tar.gz
+          if-no-files-found: error
 
-      - name: Upload native workers (for functional tests)
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-native
-          path: release/linux-unpacked/resources/native/
-
-  # ── 3. Functional tests ──────────────────────────────────────────────────────
-  # Runs the worker test suite directly on the ubuntu-latest runner using the
-  # exact workers that will be shipped. No Docker matrix here — that is for
-  # local pre-release validation across distros (npm run test:functional).
-  test-functional:
-    needs: [build-linux]
-    runs-on: ubuntu-latest
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Download native workers
-        uses: actions/download-artifact@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          name: linux-native
-          path: ci-native/
-
-      - name: Mark worker binaries executable
-        run: chmod +x ci-native/bin/*
-
-      - name: Run functional tests
-        run: |
-          bash test/workers/run-worker-tests.sh \
-            --native-dir ci-native \
-            --fixtures-dir test/fixtures
-
-  # ── 4. Release ───────────────────────────────────────────────────────────────
-  # Only runs when both test jobs and the build pass.
-  release:
-    needs: [test-functional]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download Linux artifacts
-        uses: actions/download-artifact@v4
+          node-version: 24.18.1
+          cache: npm
+      - run: npm ci
+      - run: node scripts/prepare-ace-fixture.cjs
+      - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2.32.0
         with:
-          name: linux-builds
-          path: artifacts/
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: artifacts/*
-          generate_release_notes: true
-          draft: false
-          prerelease: false
+          msystem: UCRT64
+          update: true
+          install: >-
+            make patch gcc
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-nlohmann-json
+            mingw-w64-ucrt-x86_64-libvips
+            mingw-w64-ucrt-x86_64-imagemagick
+            mingw-w64-ucrt-x86_64-libheif
+            mingw-w64-ucrt-x86_64-libarchive
+            mingw-w64-ucrt-x86_64-libmupdf
+      - name: Check release version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: node scripts/check-release-version.cjs
+      - name: Build native readers and run CTest
+        shell: msys2 {0}
+        run: bash native/deps/build-windows-x64.sh
+      - run: npm run build:app
+      - run: npm run test:unit
+      - run: node scripts/test-database.cjs
+      - name: Test bundled readers
+        run: npm run test:workers:portable
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMISCOPIO_NATIVE_DIR: native/vendor/win32-x64
+      - name: Package portable EXE and ZIP without publishing
+        run: npx electron-builder --win --publish never
+      - name: Test packaged application
+        run: npm run test:packaged
+        env:
+          COMISCOPIO_APP_BINARY: release/win-unpacked/Comiscopio.exe
+      - name: Test extracted ZIP, blocked processes and portable EXE
+        run: npm run test:windows-artifacts
+      - name: Preserve test diagnostics and native versions
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-test-reports
+          path: |
+            test-results/
+            native/vendor/win32-x64/*versions.txt
+            native/worker/build-win/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Upload validated builds
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-builds
+          path: |
+            release/*.exe
+            release/*.zip
+          if-no-files-found: error
 
-  # ---------------------------------------------------------------------------
-  # Windows build — pending native worker support for Win32
-  # ---------------------------------------------------------------------------
-  # build-windows:
-  #   needs: [test-unit]
-  #   runs-on: windows-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #
-  #     - name: Setup Node.js
-  #       uses: actions/setup-node@v4
-  #       with:
-  #         node-version: 24
-  #
-  #     - name: Install dependencies
-  #       run: npm ci
-  #
-  #     - name: Build
-  #       run: npm run build
-  #
-  #     - name: Package Windows
-  #       run: NODE_NO_WARNINGS=1 npx electron-builder --win
-  #       env:
-  #         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  #
-  #     - name: Upload artifacts
-  #       uses: actions/upload-artifact@v4
-  #       with:
-  #         name: windows-builds
-  #         path: release/*.{exe,zip}
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    needs: [linux, windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: '*-builds'
+          path: artifacts
+          merge-multiple: true
+      - name: Publish the tested artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          notes="$GITHUB_WORKSPACE/docs/releases/$RELEASE_TAG.md"
+          test -f "$notes"
+          cd artifacts
+          sha256sum ./* > SHA256SUMS.txt
+          gh release create "$RELEASE_TAG" ./* --verify-tag --notes-file "$notes" --title "Comiscopio $RELEASE_TAG"

@@ -1,9 +1,11 @@
 #include "archive_backend.h"
 #include "archive_entry_utils.h"
+#include "windows_process.h"
 
 #include <nlohmann/json.hpp>
 
 #include <cerrno>
+#include <chrono>
 #include <csignal>
 #include <cstdio>
 #include <filesystem>
@@ -11,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 #ifndef _WIN32
@@ -54,6 +57,7 @@ std::string currentExecutablePath() {
 fs::path findAncestorNamed(fs::path current, const std::string& name) {
     while (!current.empty()) {
         if (current.filename() == name) return current;
+        if (current.parent_path() == current) break;
         current = current.parent_path();
     }
     return {};
@@ -74,10 +78,10 @@ fs::path findAceHelperBinary() {
     };
 
     if (!nativeDir.empty()) {
-        candidates.push_back(nativeDir / "vendor" / "linux-x64" / "bin" / "comiscopio-ace-helper");
         candidates.push_back(nativeDir / "ace-helper" / "build" / "comiscopio-ace-helper");
         candidates.push_back(nativeDir / "ace-helper" / "build-debug" / "comiscopio-ace-helper");
         candidates.push_back(nativeDir / "ace-helper" / "build-release" / "comiscopio-ace-helper");
+        candidates.push_back(nativeDir / "vendor" / "linux-x64" / "bin" / "comiscopio-ace-helper");
     }
 
     for (const auto& candidate : candidates) {
@@ -139,6 +143,10 @@ HelperProcess spawnHelper(const fs::path& executable, const std::vector<std::str
 void killHelperProcess(const HelperProcess& process) {
     if (process.pid > 0) {
         kill(-process.pid, SIGTERM);
+        // Keep the group leader unreaped until escalation, so its PID cannot
+        // be reused. Descendants may survive even after their leader exits.
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        kill(-process.pid, SIGKILL);
     }
 }
 
@@ -170,7 +178,41 @@ public:
     int open(const std::string& archivePath, const std::string& rawDir,
              ProgressCb progressCb, void* userData) override {
 #ifdef _WIN32
-        throw std::runtime_error("ACE backend is not supported on Windows");
+        this->rawDir = rawDir;
+        entries.clear();
+        fs::create_directories(fs::u8path(rawDir));
+        const auto selfDir = windows_process::executablePath().parent_path();
+        fs::path helper = selfDir / "comiscopio-ace-helper.exe";
+        if (const char* configured = std::getenv("COMISCOPIO_ACE_HELPER_BINARY")) helper = fs::u8path(configured);
+        if (!fs::exists(helper)) throw std::runtime_error("ACE helper binary not found");
+        auto* context = static_cast<ArchiveCancelContext*>(userData);
+        std::string pending, diagnostics, lastError;
+        bool done = false;
+        int code = windows_process::capture(helper,
+            {"--input", archivePath, "--output", rawDir, "--mode", "extract-all"},
+            [&](const std::string& chunk) {
+                pending += chunk;
+                size_t end;
+                while ((end = pending.find('\n')) != std::string::npos) {
+                    auto event = json::parse(pending.substr(0, end), nullptr, false);
+                    pending.erase(0, end + 1);
+                    if (!event.is_object()) continue;
+                    const auto type = event.value("type", "");
+                    if (type == "extracting" && progressCb) {
+                        progressCb(event.value("current", 0), event.value("total", -1), event.value("name", ""), userData);
+                    } else if (type == "entry") {
+                        const auto rawFile = event.value("rawFile", std::string{});
+                        if (!rawFile.empty() && (rawFile.find_first_of("/\\:") != std::string::npos || rawFile == "..")) {
+                            throw std::runtime_error("Invalid ACE helper output path");
+                        }
+                        entries.push_back({event.value("name", ""), event.value("name", ""), rawFile.empty() ? "" : rawDir + "/" + rawFile});
+                    } else if (type == "error") lastError = event.value("message", "ACE helper failed");
+                    else if (type == "done") done = true;
+                }
+                if (pending.size() > 1048576) throw std::runtime_error("Invalid ACE helper output");
+            }, diagnostics, context ? context->flag : nullptr);
+        if (code != 0 || !done) throw std::runtime_error(lastError.empty() ? "ACE helper failed: " + diagnostics : lastError);
+        return static_cast<int>(entries.size());
 #else
         this->rawDir = rawDir;
         entries.clear();

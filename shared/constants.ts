@@ -1,5 +1,6 @@
 import * as path from 'path';
 import * as os from 'os';
+import { APP_METADATA } from './app-metadata';
 
 /** Supported image extensions (lowercase) */
 export const IMAGE_EXTENSIONS = new Set([
@@ -40,6 +41,7 @@ export const FILE_FILTERS = [
 
 /** Config directory path */
 export function getConfigDir(): string {
+  if (process.env['COMISCOPIO_CONFIG_DIR']) return path.resolve(process.env['COMISCOPIO_CONFIG_DIR']);
   if (process.platform === 'win32') {
     return path.join(process.env['APPDATA'] || os.homedir(), 'comiscopio');
   }
@@ -61,4 +63,4 @@ export const THUMBNAIL_PROTOCOL_SCHEME = 'comiscopio-thumb';
 export const PAGE_PROTOCOL_SCHEME = 'comiscopio-page';
 
 /** App version — synced from package.json at build time */
-export const APP_VERSION = '0.2.0';
+export const APP_VERSION = APP_METADATA.version;

@@ -1,4 +1,4 @@
-import { Component, input, output, signal } from '@angular/core';
+import { Component, input, output, signal, ChangeDetectionStrategy } from '@angular/core';
 
 /**
  * Bottom toolbar with page slider.
@@ -28,12 +28,9 @@ import { Component, input, output, signal } from '@angular/core';
       />
       <span class="toolbar-page">{{ totalPages() }}</span>
     </div>
-    <div
-      class="toolbar-trigger"
-      [class.inactive]="visible()"
-      (mouseenter)="show()"
-    ></div>
+    <div class="toolbar-trigger" [class.inactive]="visible()" (mouseenter)="show()"></div>
   `,
+  changeDetection: ChangeDetectionStrategy.Eager,
   styles: `
     :host {
       position: absolute;

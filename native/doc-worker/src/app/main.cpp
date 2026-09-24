@@ -4,6 +4,7 @@
 #include "manifest.h"
 #include "progress.h"
 #include "work_queue.h"
+#include "worker_input.h"
 
 #include <vips/vips.h>
 #include <nlohmann/json.hpp>
@@ -71,6 +72,7 @@ static void logDiagnostic(const char* level, const char* source, const char* eve
 // ---- Signal handling ----
 
 static volatile sig_atomic_t cancelled = 0;
+static bool quitRequested = false;
 static void signalHandler(int) { cancelled = 1; }
 
 // ---- CLI args ----
@@ -123,7 +125,15 @@ static double rssMb(const ProcMemorySnapshot& s) { return s.vmRssKb / 1024.0; }
 
 static ProcMemorySnapshot readProcMemorySnapshot() {
     ProcMemorySnapshot snapshot;
-#ifndef _WIN32
+#ifdef _WIN32
+    PROCESS_MEMORY_COUNTERS_EX counters{};
+    counters.cb = sizeof(counters);
+    if (GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters))) {
+        snapshot.vmRssKb = static_cast<long>(counters.WorkingSetSize / 1024);
+        snapshot.vmHwmKb = static_cast<long>(counters.PeakWorkingSetSize / 1024);
+        snapshot.vmSizeKb = static_cast<long>(counters.PrivateUsage / 1024);
+    }
+#else
     std::ifstream status("/proc/self/status");
     std::string line;
     while (std::getline(status, line)) {
@@ -170,25 +180,31 @@ static void logMemoryDeltaIfLarge(const char* eventName, int pageIndex, size_t e
         pageIndex, entryBytes, rssMb(before), rssMb(after), deltaMb);
 }
 
+// libvips only accounts for its own allocations. Cached JPEG operations can
+// retain libjpeg's progressive coefficient buffers well beyond that limit.
+static constexpr long kBgThumbRssThresholdKb = 320L * 1024;
+
+static ProcMemorySnapshot reclaimImageCacheIfNeeded() {
+    auto before = readProcMemorySnapshot();
+    if (before.vmRssKb <= kBgThumbRssThresholdKb || vips_cache_get_size() == 0) return before;
+    const int normalLimit = vips_cache_get_max();
+    // Trim cached operations without destroying the global cache table.
+    // vips_cache_drop_all() is unsafe here: subsequent operations reuse it.
+    vips_cache_set_max(0);
+    vips_cache_set_max(normalLimit);
+#ifndef _WIN32
+    malloc_trim(0);
+#endif
+    auto after = readProcMemorySnapshot();
+    logDiagnostic("info", "worker_mem", "cache_pressure_reclaimed",
+        "rssBefore=%.1fMB rssAfter=%.1fMB cacheLimit=%d",
+        rssMb(before), rssMb(after), normalLimit);
+    return after;
+}
+
 // ---- stdin commands ----
 
-static bool readStdinCommand(json& outCmd) {
-#ifdef _WIN32
-    return false;
-#else
-    struct pollfd pfd;
-    pfd.fd = STDIN_FILENO;
-    pfd.events = POLLIN;
-    if (poll(&pfd, 1, 0) > 0 && (pfd.revents & POLLIN)) {
-        std::string line;
-        if (std::getline(std::cin, line) && !line.empty()) {
-            try { outCmd = json::parse(line); return true; }
-            catch (...) {}
-        }
-    }
-    return false;
-#endif
-}
+static bool readStdinCommand(json& outCmd) { return readWorkerCommand(outCmd); }
 
 // ---- stdout events ----
 
@@ -245,6 +261,7 @@ static bool processDocPage(MuPdfRenderer& renderer, int pageIndex,
         manifest.addErrorPage(pageIndex, pageName, "Failed to render page", thumbFile, pageFile, "");
         emitError(pageIndex, "Failed to render page");
         manifest.write();
+        emitReady(pageIndex, pageFile, thumbFile, 0);
         return false;
     }
 
@@ -260,6 +277,7 @@ static bool processDocPage(MuPdfRenderer& renderer, int pageIndex,
         manifest.addErrorPage(pageIndex, pageName, "Failed to create vips image", thumbFile, pageFile, "");
         emitError(pageIndex, "Failed to create vips image from render");
         manifest.write();
+        emitReady(pageIndex, pageFile, thumbFile, 0);
         return false;
     }
 
@@ -297,7 +315,7 @@ static bool processDocPage(MuPdfRenderer& renderer, int pageIndex,
     malloc_trim(0);
 #endif
 
-    ProcMemorySnapshot afterRelease = readProcMemorySnapshot();
+    ProcMemorySnapshot afterRelease = reclaimImageCacheIfNeeded();
     logMemoryDeltaIfLarge("page_release_delta", pageIndex, 0, afterRender, afterRelease);
 
     auto pageEnd = std::chrono::steady_clock::now();
@@ -309,6 +327,7 @@ static bool processDocPage(MuPdfRenderer& renderer, int pageIndex,
         manifest.addErrorPage(pageIndex, pageName, "Failed to save page", thumbFile, pageFile, "");
         emitError(pageIndex, "Failed to save rendered page");
         manifest.write();
+        emitReady(pageIndex, pageFile, thumbFile, 0);
         return false;
     }
 
@@ -444,6 +463,7 @@ int main(int argc, char* argv[]) {
                     int page = cmd.value("page", 0);
                     queue.focus(page, args.windowBefore, args.windowAfter);
                 } else if (type == "quit") {
+                    quitRequested = true;
                     cancelled = 1;
                     break;
                 }
@@ -454,12 +474,7 @@ int main(int argc, char* argv[]) {
             int pageIndex = queue.next(needsPage);
 
             if (pageIndex < 0) {
-#ifndef _WIN32
-                struct pollfd pfd;
-                pfd.fd = STDIN_FILENO;
-                pfd.events = POLLIN;
-                poll(&pfd, 1, 100);
-#endif
+                waitForWorkerCommand(100);
                 continue;
             }
 
@@ -477,9 +492,8 @@ int main(int argc, char* argv[]) {
                 queue.markDone(pageIndex);
             } else {
                 // Background: thumb only — with memory backpressure
-                static constexpr long kBgThumbRssThresholdKb = 320L * 1024;
                 static int bgThumbPausedCount = 0;
-                ProcMemorySnapshot memCheck = readProcMemorySnapshot();
+                ProcMemorySnapshot memCheck = reclaimImageCacheIfNeeded();
                 if (memCheck.vmRssKb > kBgThumbRssThresholdKb) {
                     bgThumbPausedCount++;
                     if (bgThumbPausedCount % 50 == 1) {
@@ -488,12 +502,7 @@ int main(int argc, char* argv[]) {
                             rssMb(memCheck), kBgThumbRssThresholdKb / 1024.0,
                             bgThumbPausedCount, pageIndex);
                     }
-#ifndef _WIN32
-                    struct pollfd pfd;
-                    pfd.fd = STDIN_FILENO;
-                    pfd.events = POLLIN;
-                    poll(&pfd, 1, 50);
-#endif
+                waitForWorkerCommand(50);
                     continue;
                 }
 
@@ -501,6 +510,7 @@ int main(int argc, char* argv[]) {
                 std::string idx = formatIndex(pageIndex);
                 std::string thumbFile = "thumbs/" + idx + ".jpg";
 
+                bool thumbSaved = false;
                 // Rasterize at low resolution for thumbnail
                 std::vector<uint8_t> rgbData;
                 int pixW = 0, pixH = 0;
@@ -514,8 +524,8 @@ int main(int argc, char* argv[]) {
                         if (vips_thumbnail_image(image, &thumb, config.thumbWidth,
                                 "height", config.thumbWidth * 3 / 2,
                                 "size", VIPS_SIZE_DOWN, nullptr) == 0) {
-                            vips_jpegsave(thumb, (args.output + "/" + thumbFile).c_str(),
-                                "Q", config.thumbQuality, nullptr);
+                            thumbSaved = vips_jpegsave(thumb, (args.output + "/" + thumbFile).c_str(),
+                                "Q", config.thumbQuality, nullptr) == 0;
                             g_object_unref(thumb);
                         }
                         g_object_unref(image);
@@ -529,7 +539,12 @@ int main(int argc, char* argv[]) {
                 auto thumbEnd = std::chrono::steady_clock::now();
                 totalBgThumbMs += std::chrono::duration<double, std::milli>(thumbEnd - thumbStart).count();
                 bgThumbCount++;
-                emitProgress(pageIndex, totalPages, "thumb", thumbFile);
+                if (!thumbSaved) {
+                    emitError(pageIndex, "Failed to generate background thumbnail");
+                    vips_error_clear();
+                    thumbSaved = generateThumbnailPlaceholder(args.output + "/" + thumbFile, config.thumbWidth, config.thumbQuality);
+                }
+                if (thumbSaved) emitProgress(pageIndex, totalPages, "thumb", thumbFile);
                 queue.markThumbOnly(pageIndex);
             }
         }
@@ -555,5 +570,5 @@ int main(int argc, char* argv[]) {
 
     renderer.close();
     vips_shutdown();
-    return cancelled ? 1 : 0;
+    return cancelled && !quitRequested ? 1 : 0;
 }

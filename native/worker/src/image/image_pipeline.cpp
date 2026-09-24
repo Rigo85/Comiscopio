@@ -90,7 +90,12 @@ ImageResult processImage(
 
     int maxDim = std::max(result.originalWidth, result.originalHeight);
 
-    if (maxDim <= config.readerMaxDimension) {
+    const std::string extension = getExtension(name);
+    // Chromium cannot decode TIFF even when libvips can. Small TIFFs still
+    // need the reader encoding; their original bytes remain in raw/.
+    const bool browserCanDecode = extension != ".tif" && extension != ".tiff" &&
+        std::string(loader).find("Tiff") == std::string::npos;
+    if (maxDim <= config.readerMaxDimension && browserCanDecode) {
         // Bypass: copy original bytes directly, no re-encoding
         std::ofstream out(pagePath, std::ios::binary);
         if (!out) {

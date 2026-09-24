@@ -4,6 +4,7 @@
 #include "manifest.h"
 #include "progress.h"
 #include "work_queue.h"
+#include "worker_input.h"
 
 #include <vips/vips.h>
 #include <nlohmann/json.hpp>
@@ -83,6 +84,7 @@ extern std::unique_ptr<ArchiveBackend> createZipBackend();
 extern std::unique_ptr<ArchiveBackend> createSevenZBackend();
 extern std::unique_ptr<ArchiveBackend> createTarBackend();
 extern std::unique_ptr<ArchiveBackend> createAceBackend();
+extern std::unique_ptr<ArchiveBackend> createFolderBackend();
 
 static std::string getExtension(const std::string& filename) {
     auto pos = filename.rfind('.');
@@ -93,6 +95,7 @@ static std::string getExtension(const std::string& filename) {
 }
 
 static volatile sig_atomic_t cancelled = 0;
+static bool quitRequested = false;
 static void signalHandler(int) { cancelled = 1; }
 
 struct CliArgs {
@@ -147,23 +150,7 @@ static std::string formatIndex(int index) {
     return buf;
 }
 
-static bool readStdinCommand(json& outCmd) {
-#ifdef _WIN32
-    return false;
-#else
-    struct pollfd pfd;
-    pfd.fd = STDIN_FILENO;
-    pfd.events = POLLIN;
-    if (poll(&pfd, 1, 0) > 0 && (pfd.revents & POLLIN)) {
-        std::string line;
-        if (std::getline(std::cin, line) && !line.empty()) {
-            try { outCmd = json::parse(line); return true; }
-            catch (...) { logDiagnostic("warn", "worker", "bad_json", "line=%s", json(line).dump().c_str()); }
-        }
-    }
-    return false;
-#endif
-}
+static bool readStdinCommand(json& outCmd) { return readWorkerCommand(outCmd); }
 
 static void emitReady(int pageIndex, const std::string& pageFile, const std::string& thumbFile, double ms) {
     json j;
@@ -203,7 +190,15 @@ static double rssMb(const ProcMemorySnapshot& snapshot) {
 
 static ProcMemorySnapshot readProcMemorySnapshot() {
     ProcMemorySnapshot snapshot;
-#ifndef _WIN32
+#ifdef _WIN32
+    PROCESS_MEMORY_COUNTERS_EX counters{};
+    counters.cb = sizeof(counters);
+    if (GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters))) {
+        snapshot.vmRssKb = static_cast<long>(counters.WorkingSetSize / 1024);
+        snapshot.vmHwmKb = static_cast<long>(counters.PeakWorkingSetSize / 1024);
+        snapshot.vmSizeKb = static_cast<long>(counters.PrivateUsage / 1024);
+    }
+#else
     std::ifstream status("/proc/self/status");
     std::string line;
     while (std::getline(status, line)) {
@@ -293,8 +288,37 @@ static void logMemoryDeltaIfLarge(const char* eventName,
         extraBuffer);
 }
 
+// libvips only accounts for its own allocations. Cached JPEG operations can
+// retain libjpeg's progressive coefficient buffers well beyond that limit.
+static constexpr long kBgThumbRssThresholdKb = 320L * 1024;
+
+static ProcMemorySnapshot reclaimImageCacheIfNeeded() {
+    auto before = readProcMemorySnapshot();
+    if (before.vmRssKb <= kBgThumbRssThresholdKb || vips_cache_get_size() == 0) return before;
+    const int normalLimit = vips_cache_get_max();
+    // Trim cached operations without destroying the global cache table.
+    // vips_cache_drop_all() is unsafe here: subsequent operations reuse it.
+    vips_cache_set_max(0);
+    vips_cache_set_max(normalLimit);
+#ifndef _WIN32
+    malloc_trim(0);
+#endif
+    auto after = readProcMemorySnapshot();
+    logDiagnostic("info", "worker_mem", "cache_pressure_reclaimed",
+        "rssBefore=%.1fMB rssAfter=%.1fMB cacheLimit=%d",
+        rssMb(before), rssMb(after), normalLimit);
+    return after;
+}
+
 int main(int argc, char* argv[]) {
-    if (!std::setlocale(LC_CTYPE, "")) {
+    const char* locale = std::setlocale(LC_CTYPE, "");
+    if (!locale
+#ifndef _WIN32
+        || std::string(locale) == "C" || std::string(locale) == "POSIX"
+#endif
+    ) {
+        // A valid ASCII-only C locale still prevents libarchive from exposing
+        // Unicode names. Minimal Linux containers commonly start in that locale.
         std::setlocale(LC_CTYPE, "C.UTF-8");
     }
 
@@ -306,7 +330,7 @@ int main(int argc, char* argv[]) {
         logDiagnostic("error", "worker", "input_not_found", "input=%s", json(args.input).dump().c_str());
         return 1;
     }
-    if (args.backend != "ace" && args.backend != "rar" && args.backend != "zip" && args.backend != "7z" && args.backend != "tar") {
+    if (args.backend != "ace" && args.backend != "rar" && args.backend != "zip" && args.backend != "7z" && args.backend != "tar" && args.backend != "folder") {
         logDiagnostic("error", "worker", "unsupported_backend", "backend=%s", json(args.backend).dump().c_str());
         return 1;
     }
@@ -318,6 +342,25 @@ int main(int argc, char* argv[]) {
     signal(SIGTERM, signalHandler);
     signal(SIGINT, signalHandler);
 
+#ifdef _WIN32
+    wchar_t executableName[32768];
+    const auto executableLength = GetModuleFileNameW(nullptr, executableName, 32768);
+    if (executableLength && executableLength < 32768) {
+        const auto magickCoders = fs::path(std::wstring(executableName, executableLength))
+            .parent_path() / "../lib/magick";
+        if (fs::is_directory(magickCoders)) {
+            g_setenv("MAGICK_CODER_MODULE_PATH", magickCoders.u8string().c_str(), TRUE);
+        }
+    }
+#elif defined(__linux__)
+    // ImageMagick coders are plugins, not ordinary linked dependencies.
+    std::error_code moduleError;
+    const auto executable = fs::read_symlink("/proc/self/exe", moduleError);
+    const auto magickCoders = executable.parent_path() / "../lib/magick";
+    if (!moduleError && fs::is_directory(magickCoders)) {
+        setenv("MAGICK_CODER_MODULE_PATH", magickCoders.c_str(), 1);
+    }
+#endif
     if (VIPS_INIT(argv[0]) != 0) {
         logDiagnostic("error", "worker", "vips_init_failed");
         return 1;
@@ -328,6 +371,16 @@ int main(int argc, char* argv[]) {
     vips_cache_set_max(100);
     vips_cache_set_max_mem(64 * 1024 * 1024);
     vips_cache_set_max_files(20);
+
+    // A folder source must never be erased or recursively copied into itself.
+    const auto inputPath = fs::weakly_canonical(fs::u8path(args.input));
+    const auto outputPath = fs::weakly_canonical(fs::u8path(args.output));
+    const auto inside = outputPath.lexically_relative(inputPath);
+    if (outputPath == inputPath || (fs::is_directory(inputPath) && !inside.empty() && *inside.begin() != "..")) {
+        logDiagnostic("error", "worker", "invalid_output", "message=%s", json("Output must be outside the input folder").dump().c_str());
+        vips_shutdown();
+        return 1;
+    }
 
     // Clean and create output
     if (fs::exists(args.output)) fs::remove_all(args.output);
@@ -381,6 +434,7 @@ int main(int argc, char* argv[]) {
             manifest.addErrorPage(pageIndex, entryName, "Failed to read from raw", thumbFile, pageFile, originalFile);
             emitError(pageIndex, "Failed to read from raw");
             manifest.write();
+            emitReady(pageIndex, pageFile, thumbFile, 0);
             return false;
         }
         ProcMemorySnapshot afterRead = readProcMemorySnapshot();
@@ -409,7 +463,7 @@ int main(int argc, char* argv[]) {
 #ifndef _WIN32
         malloc_trim(0);  // Force glibc to return free pages to OS
 #endif
-        ProcMemorySnapshot afterRelease = readProcMemorySnapshot();
+        ProcMemorySnapshot afterRelease = reclaimImageCacheIfNeeded();
         logMemoryDeltaIfLarge("entry_release_delta", pageIndex, 0, afterProcess, afterRelease);
         auto pageEnd = std::chrono::steady_clock::now();
         double pageMs = std::chrono::duration<double, std::milli>(pageEnd - pageStart).count();
@@ -431,6 +485,7 @@ int main(int argc, char* argv[]) {
             manifest.addErrorPage(pageIndex, entryName, result.errorMessage, thumbFile, errPageFile, originalFile);
             emitError(pageIndex, result.errorMessage);
             manifest.write();
+            emitReady(pageIndex, errPageFile, thumbFile, pageMs);
             return false;
         }
 
@@ -491,6 +546,7 @@ int main(int argc, char* argv[]) {
             manifest.addErrorPage(0, entryName, result.errorMessage, thumbFile, errPageFile, originalFile);
             emitError(0, result.errorMessage);
             manifest.write();
+            emitReady(0, errPageFile, thumbFile, pageMs);
             return false;
         }
 
@@ -520,9 +576,11 @@ int main(int argc, char* argv[]) {
     bool previewProcessed = false;
     std::string previewEntryName;
     std::string previewRawPath;
+    std::unique_ptr<ArchiveBackend> backend;
     {
         std::unique_ptr<ArchiveBackend> previewBackend;
-        if (args.backend == "ace") previewBackend = createAceBackend();
+        if (args.backend == "folder") previewBackend = createFolderBackend();
+        else if (args.backend == "ace") previewBackend = createAceBackend();
         else if (args.backend == "rar") previewBackend = createRarBackend();
         else if (args.backend == "zip") previewBackend = createZipBackend();
         else if (args.backend == "7z") previewBackend = createSevenZBackend();
@@ -540,17 +598,22 @@ int main(int argc, char* argv[]) {
         if (previewReady) {
             logDiagnostic("info", "worker", "preview_ready", "previewMs=%.1f entry=%s", previewMs, json(previewEntryName).dump().c_str());
             previewProcessed = processPreviewFromRaw(previewEntryName, previewRawPath);
-            previewBackend->close();
+            // Keep the 7z SDK's decoded solid block for the full extraction.
+            // Other backends retain their existing independent preview lifetime.
+            if (args.backend == "7z") backend = std::move(previewBackend);
+            else previewBackend->close();
         }
     }
 
     // === Phase 1: Extract all entries to raw/ (single sequential scan) ===
-    std::unique_ptr<ArchiveBackend> backend;
-    if (args.backend == "ace") backend = createAceBackend();
-    else if (args.backend == "rar") backend = createRarBackend();
-    else if (args.backend == "zip") backend = createZipBackend();
-    else if (args.backend == "7z") backend = createSevenZBackend();
-    else if (args.backend == "tar") backend = createTarBackend();
+    if (!backend) {
+        if (args.backend == "folder") backend = createFolderBackend();
+        else if (args.backend == "ace") backend = createAceBackend();
+        else if (args.backend == "rar") backend = createRarBackend();
+        else if (args.backend == "zip") backend = createZipBackend();
+        else if (args.backend == "7z") backend = createSevenZBackend();
+        else if (args.backend == "tar") backend = createTarBackend();
+    }
     int totalEntries;
 
     logDiagnostic("info", "worker", "phase_start", "phase=%s", json("extract_raw").dump().c_str());
@@ -561,6 +624,9 @@ int main(int argc, char* argv[]) {
                                       extractionProgress, &cancelContext);
     } catch (const std::exception& e) {
         logDiagnostic("error", "worker", "archive_open_failed", "message=%s", json(std::string(e.what())).dump().c_str());
+        const auto error = json{{"type", "error"}, {"message", e.what()}}.dump();
+        fprintf(stdout, "%s\n", error.c_str());
+        fflush(stdout);
         vips_shutdown();
         return 1;
     }
@@ -614,6 +680,7 @@ int main(int argc, char* argv[]) {
                     int page = cmd.value("page", 0);
                     queue.focus(page, args.windowBefore, args.windowAfter);
                 } else if (type == "quit") {
+                    quitRequested = true;
                     cancelled = 1;
                     break;
                 }
@@ -625,12 +692,7 @@ int main(int argc, char* argv[]) {
             int pageIndex = queue.next(needsPage);
 
             if (pageIndex < 0) {
-#ifndef _WIN32
-                struct pollfd pfd;
-                pfd.fd = STDIN_FILENO;
-                pfd.events = POLLIN;
-                poll(&pfd, 1, 100);
-#endif
+                waitForWorkerCommand(100);
                 continue;
             }
 
@@ -646,9 +708,8 @@ int main(int argc, char* argv[]) {
                 queue.markDone(pageIndex);
             } else if (pageIndex != 0 || processedCount == 0) {
                 // Background: thumb only — with memory backpressure
-                static constexpr long kBgThumbRssThresholdKb = 320L * 1024; // 320MB
                 static int bgThumbPausedCount = 0;
-                ProcMemorySnapshot memCheck = readProcMemorySnapshot();
+                ProcMemorySnapshot memCheck = reclaimImageCacheIfNeeded();
                 if (memCheck.vmRssKb > kBgThumbRssThresholdKb) {
                     bgThumbPausedCount++;
                     if (bgThumbPausedCount % 50 == 1) {
@@ -658,12 +719,7 @@ int main(int argc, char* argv[]) {
                             bgThumbPausedCount, pageIndex);
                     }
                     // Don't advance — let the allocator reclaim before next attempt
-#ifndef _WIN32
-                    struct pollfd pfd;
-                    pfd.fd = STDIN_FILENO;
-                    pfd.events = POLLIN;
-                    poll(&pfd, 1, 50);  // Brief pause, still responsive to stdin
-#endif
+                    waitForWorkerCommand(50);
                     continue;
                 }
 
@@ -674,21 +730,19 @@ int main(int argc, char* argv[]) {
                 std::string thumbFile = "thumbs/" + idx + ".jpg";
 
                 ProcMemorySnapshot beforeRead = readProcMemorySnapshot();
-                if (!backend->getEntry(pageIndex, entryData) || entryData.empty()) {
-                    queue.markThumbOnly(pageIndex);
-                    continue;
-                }
+                const bool readOk = backend->getEntry(pageIndex, entryData) && !entryData.empty();
                 ProcMemorySnapshot afterRead = readProcMemorySnapshot();
                 logMemoryDeltaIfLarge("bg_entry_read_delta", pageIndex, entryData.size(), beforeRead, afterRead);
                 VipsImage* thumb = nullptr;
                 ProcMemorySnapshot beforeThumb = readProcMemorySnapshot();
-                if (vips_thumbnail_buffer(
+                bool thumbSaved = false;
+                if (readOk && vips_thumbnail_buffer(
                         const_cast<void*>(static_cast<const void*>(entryData.data())),
                         entryData.size(), &thumb, config.thumbWidth,
                         "height", config.thumbWidth * 3 / 2,
                         "size", VIPS_SIZE_DOWN, nullptr) == 0) {
-                    vips_jpegsave(thumb, (args.output + "/" + thumbFile).c_str(),
-                        "Q", config.thumbQuality, nullptr);
+                    thumbSaved = vips_jpegsave(thumb, (args.output + "/" + thumbFile).c_str(),
+                        "Q", config.thumbQuality, nullptr) == 0;
                     g_object_unref(thumb);
                 }
                 ProcMemorySnapshot afterThumb = readProcMemorySnapshot();
@@ -698,12 +752,17 @@ int main(int argc, char* argv[]) {
 #ifndef _WIN32
                 malloc_trim(0);
 #endif
-                ProcMemorySnapshot afterRelease = readProcMemorySnapshot();
+                ProcMemorySnapshot afterRelease = reclaimImageCacheIfNeeded();
                 logMemoryDeltaIfLarge("bg_entry_release_delta", pageIndex, 0, afterThumb, afterRelease);
                 auto thumbEnd = std::chrono::steady_clock::now();
                 totalBackgroundThumbMs += std::chrono::duration<double, std::milli>(thumbEnd - thumbStart).count();
                 backgroundThumbCount++;
-                emitProgress(pageIndex, totalEntries, "thumb", thumbFile);
+                if (!thumbSaved) {
+                    emitError(pageIndex, "Failed to generate background thumbnail");
+                    vips_error_clear();
+                    thumbSaved = generateThumbnailPlaceholder(args.output + "/" + thumbFile, config.thumbWidth, config.thumbQuality);
+                }
+                if (thumbSaved) emitProgress(pageIndex, totalEntries, "thumb", thumbFile);
                 queue.markThumbOnly(pageIndex);
             }
         }
@@ -736,5 +795,5 @@ int main(int argc, char* argv[]) {
 
     backend->close();
     vips_shutdown();
-    return cancelled ? 1 : 0;
+    return cancelled && !quitRequested ? 1 : 0;
 }

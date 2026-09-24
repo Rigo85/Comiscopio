@@ -31,7 +31,7 @@ const FIXTURES = path.resolve(__dirname, '../fixtures/archive');
 function makeMockProcess() {
   const stdout = new Readable({ read() {} });
   const stderr = new Readable({ read() {} });
-  const stdin = { write: vi.fn(), end: vi.fn(), writable: true };
+  const stdin = Object.assign(new EventEmitter(), { write: vi.fn(), end: vi.fn(), writable: true });
   const proc = new EventEmitter() as any;
   proc.stdout = stdout;
   proc.stderr = stderr;
@@ -245,15 +245,32 @@ describe('startSession JSON-line event parsing', () => {
 
   it('emits error when process exits with non-zero code', () => {
     const events = startAndCollect();
-    mockProc.emit('exit', 2);
+    mockProc.emit('close', 2);
     const err = events.find((e) => e.type === 'error');
     expect(err).toBeDefined();
     expect(err.message).toMatch(/code 2/);
   });
 
+  it('preserves a fatal limit error arriving after exit but before pipes close', async () => {
+    const events = startAndCollect();
+    mockProc.emit('exit', 1);
+    expect(events).toHaveLength(0);
+    await push(JSON.stringify({ type: 'error', message: 'ACE supera el limite total' }));
+    mockProc.emit('close', 1);
+    expect(events).toEqual([{ type: 'error', message: 'ACE supera el limite total' }]);
+    expect((bridge as any).cleanupSessionArtifacts).toHaveBeenCalledOnce();
+  });
+
+  it('still reports a crash after a recoverable page error', async () => {
+    const events = startAndCollect();
+    await push(JSON.stringify({ type: 'error', page: 2, message: 'Imagen danada' }));
+    mockProc.emit('close', 2);
+    expect(events.at(-1)).toMatchObject({ type: 'error', message: 'Worker exited with code 2' });
+  });
+
   it('does NOT emit error when process exits with code 0', () => {
     const events = startAndCollect();
-    mockProc.emit('exit', 0);
+    mockProc.emit('close', 0);
     expect(events.filter((e) => e.type === 'error')).toHaveLength(0);
   });
 
@@ -279,4 +296,78 @@ describe('startSession JSON-line event parsing', () => {
     bridge.startSession('h3', 'manga.cbz', () => {});
     expect((bridge as any).getWorkerBinaryPath).toHaveBeenCalled();
   });
+});
+
+
+it('replacement sessions cannot lose their artifacts when the previous worker exits', () => {
+  const bridge = makeBridge();
+  const firstProc = makeMockProcess();
+  const nextProc = makeMockProcess();
+  vi.mocked(spawn).mockReturnValueOnce(firstProc).mockReturnValueOnce(nextProc);
+  const first = bridge.startSession('same', 'first.cbz', () => {});
+  const next = bridge.startSession('same', 'first.cbz', () => {});
+  expect(next.outputDir).not.toBe(first.outputDir);
+  firstProc.emit('close', 0);
+  expect(bridge.getSession('same')).toBe(next);
+  expect((bridge as any).cleanupSessionArtifacts).toHaveBeenCalledWith(first);
+  expect((bridge as any).cleanupSessionArtifacts).not.toHaveBeenCalledWith(next);
+  bridge.closeSession('same');
+  nextProc.emit('close', 0);
+});
+
+it('retains completed output until the reader closes it', () => {
+  const bridge = makeBridge();
+  const proc = makeMockProcess();
+  vi.mocked(spawn).mockReturnValue(proc);
+  const session = bridge.startSession('completed', 'book.cbz', () => {});
+  proc.emit('close', 0);
+  expect(bridge.getSession('completed')).toBe(session);
+  expect((bridge as any).cleanupSessionArtifacts).not.toHaveBeenCalled();
+  bridge.closeSession('completed');
+  expect((bridge as any).cleanupSessionArtifacts).toHaveBeenCalledWith(session);
+});
+
+it('routes image directories to the folder backend', () => {
+  const bridge = makeBridge();
+  expect((bridge as any).detectBackend(FIXTURES)).toBe('folder');
+});
+
+it('shutdown waits for a previously closed session and its asynchronous cleanup', async () => {
+  const bridge = makeBridge();
+  delete (bridge as any).cleanupSessionArtifacts;
+  const proc = makeMockProcess();
+  vi.mocked(spawn).mockReturnValue(proc);
+  let finishCleanup!: () => void;
+  const removal = vi.spyOn(fs.promises, 'rm').mockImplementation(() =>
+    new Promise<void>(resolve => { finishCleanup = resolve; }));
+  try {
+    bridge.startSession('closing', 'book.cbz', () => {});
+    bridge.closeSession('closing');
+    expect(bridge.getSession('closing')).toBeUndefined();
+    let finished = false;
+    const shutdown = bridge.closeAll().then(() => { finished = true; });
+    await Promise.resolve();
+    expect(finished).toBe(false);
+    proc.emit('close', 0);
+    await Promise.resolve();
+    expect(removal).toHaveBeenCalled();
+    expect(finished).toBe(false);
+    finishCleanup();
+    await shutdown;
+    expect(finished).toBe(true);
+  } finally {
+    removal.mockRestore();
+  }
+});
+
+it('signals POSIX workers during close so busy extraction can cancel before escalation', () => {
+  const bridge = makeBridge();
+  const proc = makeMockProcess();
+  vi.mocked(spawn).mockReturnValue(proc);
+  bridge.startSession('busy', 'busy.cba', () => {});
+  bridge.closeSession('busy');
+  expect(proc.stdin.end).toHaveBeenCalledWith('{"type":"quit"}\n');
+  if (process.platform !== 'win32') expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
+  else expect(proc.kill).not.toHaveBeenCalled();
+  proc.emit('close', 1);
 });

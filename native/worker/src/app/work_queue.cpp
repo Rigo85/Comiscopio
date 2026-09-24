@@ -50,6 +50,10 @@ WorkQueue::WorkQueue(int totalPages, const std::string& outputDir)
 }
 
 void WorkQueue::focus(int centerPage, int windowBefore, int windowAfter) {
+    if (totalPages <= 0) return;
+    centerPage = std::clamp(centerPage, 0, totalPages - 1);
+    windowBefore = std::max(0, windowBefore);
+    windowAfter = std::max(0, windowAfter);
     int start = std::max(0, centerPage - windowBefore);
     int end = std::min(totalPages - 1, centerPage + windowAfter);
 
@@ -117,8 +121,8 @@ int WorkQueue::next(bool& outNeedsPage) {
 
     // Second: background sequential thumbs
     while (bgNext < totalPages) {
-        int page = bgNext++;
-        if (donePages.count(page) || doneThumbOnly.count(page)) continue;
+        int page = bgNext;
+        if (donePages.count(page) || doneThumbOnly.count(page)) { ++bgNext; continue; }
 
         outNeedsPage = false; // background only needs thumb
         return page;

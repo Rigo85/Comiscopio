@@ -102,8 +102,9 @@ declare -A SKIP_MSG    # image -> reason
 
 # ── run tests ────────────────────────────────────────────────────────────────
 # Parent dir of NATIVE_DIR (the linux-unpacked dir) — mounted read-only into the container
-APP_DIR="$(dirname "$(dirname "$NATIVE_DIR")")"   # .../release/linux-unpacked
-NATIVE_INSIDE="/app/resources/native"
+NATIVE_DIR="$(cd "$NATIVE_DIR" && pwd -P)"
+FIXTURES_DIR="$(cd "$FIXTURES_DIR" && pwd -P)"
+NATIVE_INSIDE="/native"
 FIXTURES_INSIDE="/test/fixtures"
 WORKER_TESTS_INSIDE="/test/workers/run-worker-tests.sh"
 
@@ -112,7 +113,7 @@ echo "┌───────────────────────�
 echo "│  Comiscopio — Distro Functional Test Matrix      │"
 echo "├─────────────────────────────────────────────────┤"
 printf "│  distros  : %-35s│\n" "$(basename "$DISTROS_FILE") (${#IMAGES[@]} images)"
-printf "│  native   : %-35s│\n" "$(basename "$APP_DIR")/..."
+printf "│  native   : %-35s│\n" "$(basename "$NATIVE_DIR")"
 printf "│  fixtures : %-35s│\n" "$(basename "$FIXTURES_DIR")"
 echo "└─────────────────────────────────────────────────┘"
 
@@ -134,7 +135,8 @@ for image in "${IMAGES[@]}"; do
     # Build docker run command
     docker_cmd=(
         docker run --rm
-        -v "${APP_DIR}:/app:ro"
+        -v "${NATIVE_DIR}:/native:ro"
+        -v "${FIXTURES_DIR}:/test/fixtures:ro"
         -v "${REPO_ROOT}/test:/test:ro"
         "$image"
         bash "$WORKER_TESTS_INSIDE"
@@ -186,4 +188,4 @@ echo "  ────────────────────────
 echo "  PASS: $PASS_COUNT   FAIL: $FAIL_COUNT   SKIP: $SKIP_COUNT"
 echo "════════════════════════════════════════════════════"
 
-[[ $FAIL_COUNT -eq 0 ]]
+[[ $FAIL_COUNT -eq 0 && $PASS_COUNT -gt 0 ]]

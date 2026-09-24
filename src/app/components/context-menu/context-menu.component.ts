@@ -1,4 +1,13 @@
-import { Component, input, output, signal, HostListener, ElementRef, viewChild } from '@angular/core';
+import {
+  Component,
+  input,
+  output,
+  signal,
+  HostListener,
+  ElementRef,
+  viewChild,
+  ChangeDetectionStrategy,
+} from '@angular/core';
 import type { ReadingMode, FitMode, PageLayout } from '../../../../shared/models';
 
 export interface ContextMenuAction {
@@ -19,7 +28,6 @@ export interface ContextMenuAction {
     | 'about'
     | 'add-bookmark'
     | 'goto-bookmark'
-
     | 'open-folder';
   value?: any;
 }
@@ -66,6 +74,7 @@ type MenuEntry = MenuItem | MenuSeparator;
       </div>
     }
   `,
+  changeDetection: ChangeDetectionStrategy.Eager,
   styles: `
     .menu-backdrop {
       position: fixed;
@@ -189,34 +198,82 @@ export class ContextMenuComponent {
 
       // Reading modes
       const rm = this.readingMode();
-      items.push({ label: 'Cómic (LTR)', action: { type: 'reading-mode', value: 'ltr' }, active: rm === 'ltr' });
-      items.push({ label: 'Manga (RTL)', action: { type: 'reading-mode', value: 'rtl' }, active: rm === 'rtl' });
-      items.push({ label: 'Vertical (Webtoon)', action: { type: 'reading-mode', value: 'vertical' }, active: rm === 'vertical' });
+      items.push({
+        label: 'Cómic (LTR)',
+        action: { type: 'reading-mode', value: 'ltr' },
+        active: rm === 'ltr',
+      });
+      items.push({
+        label: 'Manga (RTL)',
+        action: { type: 'reading-mode', value: 'rtl' },
+        active: rm === 'rtl',
+      });
+      items.push({
+        label: 'Vertical (Webtoon)',
+        action: { type: 'reading-mode', value: 'vertical' },
+        active: rm === 'vertical',
+      });
 
       items.push({ separator: true });
 
       // Page layout
       const pl = this.pageLayout();
-      items.push({ label: 'Página simple', action: { type: 'page-layout', value: 'single' }, active: pl === 'single' });
-      items.push({ label: 'Doble página', action: { type: 'page-layout', value: 'double' }, active: pl === 'double' });
+      items.push({
+        label: 'Página simple',
+        action: { type: 'page-layout', value: 'single' },
+        active: pl === 'single',
+      });
+      items.push({
+        label: 'Doble página',
+        action: { type: 'page-layout', value: 'double' },
+        active: pl === 'double',
+      });
 
       items.push({ separator: true });
 
       // Fit modes
       const fm = this.fitMode();
-      items.push({ label: 'Ajustar al ancho', action: { type: 'fit-mode', value: 'fit-width' }, active: fm === 'fit-width' });
-      items.push({ label: 'Ajustar al alto', action: { type: 'fit-mode', value: 'fit-height' }, active: fm === 'fit-height' });
-      items.push({ label: 'Ajustar a la página', action: { type: 'fit-mode', value: 'fit-page' }, active: fm === 'fit-page' });
-      items.push({ label: 'Tamaño original', action: { type: 'fit-mode', value: 'original' }, active: fm === 'original' });
+      items.push({
+        label: 'Ajustar al ancho',
+        action: { type: 'fit-mode', value: 'fit-width' },
+        active: fm === 'fit-width',
+      });
+      items.push({
+        label: 'Ajustar al alto',
+        action: { type: 'fit-mode', value: 'fit-height' },
+        active: fm === 'fit-height',
+      });
+      items.push({
+        label: 'Ajustar a la página',
+        action: { type: 'fit-mode', value: 'fit-page' },
+        active: fm === 'fit-page',
+      });
+      items.push({
+        label: 'Tamaño original',
+        action: { type: 'fit-mode', value: 'original' },
+        active: fm === 'original',
+      });
 
       items.push({ separator: true });
 
       items.push({ label: 'Ir a página...', action: { type: 'goto-page' } });
-      items.push({ label: 'Ver optimizada', action: { type: 'page-source', value: 'optimized' }, active: this.pageSource() === 'optimized' });
-      items.push({ label: 'Ver original', action: { type: 'page-source', value: 'original' }, active: this.pageSource() === 'original' });
+      items.push({
+        label: 'Ver optimizada',
+        action: { type: 'page-source', value: 'optimized' },
+        active: this.pageSource() === 'optimized',
+      });
+      items.push({
+        label: 'Ver original',
+        action: { type: 'page-source', value: 'original' },
+        active: this.pageSource() === 'original',
+      });
       items.push({ label: 'Agregar marcador', action: { type: 'add-bookmark' } });
       items.push({ label: 'Ver marcadores...', action: { type: 'goto-bookmark' } });
-      items.push({ label: 'Miniaturas', action: { type: 'thumbnails' }, active: this.showThumbnails() });
+      items.push({
+        label: 'Miniaturas',
+        action: { type: 'thumbnails' },
+        active: this.showThumbnails(),
+      });
       items.push({ label: 'Resetear filtros', action: { type: 'reset-filters' } });
 
       items.push({ separator: true });
@@ -226,8 +283,16 @@ export class ContextMenuComponent {
 
     items.push({ separator: true });
 
-    items.push({ label: 'Siempre visible', action: { type: 'always-on-top' }, active: this.isAlwaysOnTop() });
-    items.push({ label: 'Pantalla completa', action: { type: 'fullscreen' }, active: this.isFullscreen() });
+    items.push({
+      label: 'Siempre visible',
+      action: { type: 'always-on-top' },
+      active: this.isAlwaysOnTop(),
+    });
+    items.push({
+      label: 'Pantalla completa',
+      action: { type: 'fullscreen' },
+      active: this.isFullscreen(),
+    });
     this.menuItems.set(items);
   }
 }

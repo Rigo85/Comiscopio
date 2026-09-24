@@ -8,6 +8,8 @@ VENDOR="/workspace/native/vendor/linux-x64"
 BIN_DIR="$VENDOR/bin"
 LIB_DIR="$VENDOR/lib"
 
+# The release build owns this generated directory; stale SONAMEs must not survive.
+rm -rf "$LIB_DIR"
 mkdir -p "$LIB_DIR"
 
 # Returns 0 (true) if the library should NOT be bundled.
@@ -60,6 +62,18 @@ for binary in "$BIN_DIR"/comiscopio-worker "$BIN_DIR"/comiscopio-ace-helper "$BI
         is_system_lib "$lib_path" && continue
         install_lib "$lib_path"
     done < <(ldd "$binary" 2>/dev/null | grep "=>" | awk '{print $3}' | grep "^/")
+done
+
+# libvips delegates BMP to ImageMagick, whose coder is loaded with dlopen and
+# therefore is absent from ldd. Bundle that coder and its own dependencies.
+mkdir -p "$LIB_DIR/magick"
+for module in /usr/lib/*/ImageMagick-*/modules-*/coders/{magick,bmp}.so; do
+    [ -f "$module" ] || { echo 'ImageMagick BMP coder missing' >&2; exit 1; }
+    cp "$module" "${module%.so}.la" "$LIB_DIR/magick/"
+    patchelf --set-rpath '$ORIGIN/..' "$LIB_DIR/magick/$(basename "$module")"
+    while IFS= read -r lib_path; do
+        is_system_lib "$lib_path" || install_lib "$lib_path"
+    done < <(ldd "$module" | awk '/=> \// {print $3}')
 done
 
 echo ""

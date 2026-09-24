@@ -13,3 +13,6 @@ void generatePlaceholder(
     int thumbQuality,
     int readerQuality
 );
+
+// Returns true only after writing a valid thumbnail placeholder.
+bool generateThumbnailPlaceholder(const std::string& thumbPath, int thumbWidth, int thumbQuality);

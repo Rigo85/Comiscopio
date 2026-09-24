@@ -1,4 +1,4 @@
-import { Component } from '@angular/core';
+import { Component, ChangeDetectionStrategy } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
 import { TitlebarComponent } from './components/titlebar/titlebar.component';
 
@@ -11,6 +11,7 @@ import { TitlebarComponent } from './components/titlebar/titlebar.component';
       <router-outlet />
     </main>
   `,
+  changeDetection: ChangeDetectionStrategy.Eager,
   styles: `
     :host {
       display: flex;

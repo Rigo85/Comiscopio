@@ -32,6 +32,9 @@ if [[ ! -d "$BIN_DIR" ]]; then
     echo "ERROR: $BIN_DIR does not exist" >&2
     exit 1
 fi
+NATIVE_DIR=$(cd "$NATIVE_DIR" && pwd -P)
+BIN_DIR="$NATIVE_DIR/bin"
+LIB_DIR="$NATIVE_DIR/lib"
 
 # Shared libraries that are always acceptable from the system.
 # These are either part of glibc, the kernel vDSO, or the GCC runtime.
@@ -85,13 +88,20 @@ check_binary() {
     local unexpected=0
     local ldd_output
     # LD_LIBRARY_PATH lets ldd find the bundled libs so we can classify them correctly
-    ldd_output=$(LD_LIBRARY_PATH="$LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-                 ldd "$binary" 2>&1) || true
+    if ! ldd_output=$(LC_ALL=C LD_LIBRARY_PATH="$LIB_DIR" ldd "$binary" 2>&1); then
+        echo "  ERROR: ldd failed: $ldd_output"
+        OVERALL_UNEXPECTED=$((OVERALL_UNEXPECTED + 1))
+        return
+    fi
+    if [[ -z "$ldd_output" ]]; then
+        echo "  ERROR: ldd returned no dependency information"
+        OVERALL_UNEXPECTED=$((OVERALL_UNEXPECTED + 1))
+        return
+    fi
 
     while IFS= read -r line; do
         # Skip blank lines and the binary name line
         [[ -z "${line// }" ]] && continue
-        [[ "$line" == *"$name"* ]] && continue
 
         # "not found" — critical: dep missing on this system
         if echo "$line" | grep -q 'not found'; then
@@ -113,7 +123,7 @@ check_binary() {
 
         if is_system_ok "$soname"; then
             printf '  [SYSTEM-OK]  %-35s  %s\n' "$soname" "${resolved:-}"
-        elif [[ -n "$resolved" ]] && echo "$resolved" | grep -q "$LIB_DIR"; then
+        elif [[ "$resolved" == "$LIB_DIR/"* ]]; then
             printf '  [BUNDLED]    %-35s  %s\n' "$soname" "$resolved"
         elif [[ -n "$resolved" ]] && [[ -f "$resolved" ]]; then
             # Resolved to a system path that is NOT in our accepted list
@@ -122,6 +132,7 @@ check_binary() {
         else
             # Unresolved and not in accepted list
             printf '  [UNKNOWN]    %-35s  (could not classify)\n' "$soname"
+            unexpected=$((unexpected + 1))
         fi
     done <<< "$ldd_output"
 
@@ -132,7 +143,14 @@ check_binary() {
     OVERALL_UNEXPECTED=$((OVERALL_UNEXPECTED + unexpected))
 }
 
-# Check all binaries in bin/
+# All four executables are required, even when bin/ is empty.
+for name in comiscopio-worker comiscopio-doc-worker comiscopio-ace-helper comiscopio-unace; do
+    if [[ ! -f "$BIN_DIR/$name" ]]; then
+        echo "ERROR: required binary missing: $name"
+        OVERALL_MISSING=$((OVERALL_MISSING + 1))
+    fi
+done
+# Also check any additional binaries.
 for binary in "$BIN_DIR"/*; do
     [[ -f "$binary" ]] || continue
     check_binary "$binary"

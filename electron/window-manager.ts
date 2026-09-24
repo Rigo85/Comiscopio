@@ -123,7 +123,7 @@ export class WindowManager {
     return this.windows.get(win) ?? null;
   }
 
-  setFileHashForWindow(win: BrowserWindow, fileHash: string): void {
+  setFileHashForWindow(win: BrowserWindow, fileHash: string | null): void {
     this.windows.set(win, fileHash);
   }
 

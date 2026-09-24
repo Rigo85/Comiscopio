@@ -43,6 +43,7 @@ test/.venv/
 .sass-cache/
 /connect.lock
 /coverage
+/test-results/
 /libpeerconnection.log
 testem.log
 /typings
@@ -72,3 +73,5 @@ ejecutar-tests.md
 prueba-ejececion-test-funcionales*.txt
 plan-*
 por-hacer.md
+# Downloaded test samples; never included in source or release artifacts.
+.cache/

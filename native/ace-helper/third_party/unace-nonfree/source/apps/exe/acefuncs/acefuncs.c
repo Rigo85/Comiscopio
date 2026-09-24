@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "comiscopio_limits.h"
 
 #define INCL_APPS_EXE_ACEFUNCS_EXCLUSIVE
 
@@ -36,12 +37,17 @@ CHAR      ShortStr[BASE_LFN_MAXLEN],
 PCHAR     OutputFileName;
 INT       I;
 const char *ComiscopioListPrefix;
+unsigned long long ComiscopioCount = 0, ComiscopioTotal = 0;
+unsigned long long ComiscopioMaxEntries, ComiscopioMaxEntry, ComiscopioMaxTotal;
 union {
 tBASE_DOSFUNCS_FileTime Fields;
 ULONG                   Raw;
 } FileTime;
 
   ComiscopioListPrefix = getenv("COMISCOPIO_UNACE_LIST_PREFIX");
+  ComiscopioMaxEntries = comiscopio_limit("COMISCOPIO_UNACE_MAX_ENTRIES");
+  ComiscopioMaxEntry = comiscopio_limit("COMISCOPIO_UNACE_MAX_ENTRY_BYTES");
+  ComiscopioMaxTotal = comiscopio_limit("COMISCOPIO_UNACE_MAX_TOTAL_BYTES");
 
   BASE_FILELIST_Init();
   BASE_FILELIST_VolumeCreate();
@@ -68,17 +74,29 @@ ULONG                   Raw;
 
     while (!BASE_ERROR_EXTERN_HandleCancel(1) && BASE_ARCBLK_LoadBlock())
     {
+      if (ComiscopioListPrefix && *ComiscopioListPrefix &&
+          BASE_ARCBLK.Header.Basic.HEAD_TYPE == BASE_ACESTRUC_BLOCK_FILE)
+      {
+        unsigned long long Size = BASE_ARCBLK.Header.File.SIZE;
+        if (ComiscopioCount >= ComiscopioMaxEntries) comiscopio_limit_failure("entries");
+        if (Size > ComiscopioMaxEntry) comiscopio_limit_failure("entry_bytes");
+        if (Size > ComiscopioMaxTotal - ComiscopioTotal) comiscopio_limit_failure("total_bytes");
+        ComiscopioCount++;
+        ComiscopioTotal += Size;
+        BASE_ARCBLK_GetFileName(FullStr, &BASE_ARCBLK.Header);
+        printf("\n%s%llu\t%d\t", ComiscopioListPrefix, Size,
+            (BASE_ARCBLK.Header.File.ATTR & BASE_DOSFUNCS_SUBDIR) != 0);
+        /* Hex prevents tabs/newlines in names from forging listing records. */
+        for (I = 0; FullStr[I]; I++) printf("%02x", (unsigned char)FullStr[I]);
+        putchar('\n');
+        continue;
+      }
       if ((BASE_ARCBLK.Header.Basic.HEAD_TYPE == BASE_ACESTRUC_BLOCK_FILE)
           && !(BASE_ARCBLK.Header.File.ATTR & BASE_DOSFUNCS_SUBDIR)
           && BASE_FILELIST_Check(BASE_ARCBLK_GetFileName(ShortStr,
                                                       &BASE_ARCBLK.Header)))
       {
         strcpy(FullStr, ShortStr);
-
-        if (ComiscopioListPrefix && *ComiscopioListPrefix)
-        {
-          printf("%s%s\n", ComiscopioListPrefix, FullStr);
-        }
 
         OutputFileName = strrchr(ShortStr, '\\');
 

@@ -24,6 +24,7 @@ cmake -B "$NATIVE/worker/build-release" \
       -DCMAKE_BUILD_TYPE=Release \
       -DUSE_STATIC_DEPS=ON
 cmake --build "$NATIVE/worker/build-release" -j"$(nproc)"
+ctest --test-dir "$NATIVE/worker/build-release" --output-on-failure
 cp "$NATIVE/worker/build-release/comiscopio-worker" "$VENDOR/bin/"
 echo "OK: comiscopio-worker"
 
@@ -46,7 +47,7 @@ echo "==================================================================="
 cmake -B "$NATIVE/doc-worker/build-release" \
       -S "$NATIVE/doc-worker" \
       -DCMAKE_BUILD_TYPE=Release \
-      -DUSE_STATIC_DEPS=ON
+      -DUSE_STATIC_DEPS=ON -DMUPDF_BUNDLED_THIRD=ON
 cmake --build "$NATIVE/doc-worker/build-release" -j"$(nproc)"
 cp "$NATIVE/doc-worker/build-release/comiscopio-doc-worker" "$VENDOR/bin/"
 echo "OK: comiscopio-doc-worker"
@@ -66,3 +67,9 @@ ls -lh "$VENDOR/bin/"
 echo ""
 echo "  Libs     : $VENDOR/lib/"
 echo "  Count    : $(find "$VENDOR/lib" -name "*.so*" ! -type l | wc -l) shared libraries bundled"
+
+cp /usr/local/share/comiscopio/{reader-versions.env,package-versions.txt} "$VENDOR/"
+mkdir -p "$VENDOR/licenses"
+cp -r /usr/local/share/comiscopio/licenses/. "$VENDOR/licenses/"
+cp "$NATIVE/ace-helper/third_party/unace-nonfree/licence" "$VENDOR/licenses/unace.txt"
+bash /workspace/test/ldd/check-deps.sh "$VENDOR"

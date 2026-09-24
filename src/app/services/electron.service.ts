@@ -37,6 +37,7 @@ export class ElectronService {
     filePath: string;
     totalPages: number;
     alreadyOpen: boolean;
+    redirected?: boolean;
   }> {
     return (await this.api.invoke(IpcChannels.WORKER_START, filePath)) as any;
   }

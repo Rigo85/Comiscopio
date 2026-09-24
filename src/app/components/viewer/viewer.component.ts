@@ -1,6 +1,20 @@
-import { Component, OnInit, OnDestroy, HostListener, signal, computed, ElementRef, ViewChild } from '@angular/core';
+import {
+  Component,
+  OnInit,
+  OnDestroy,
+  HostListener,
+  signal,
+  computed,
+  ElementRef,
+  ViewChild,
+  ChangeDetectionStrategy,
+} from '@angular/core';
 import { ElectronService, WindowState } from '../../services/electron.service';
-import { PageCacheService, CachedPage, PageArtifactSource } from '../../services/page-cache.service';
+import {
+  PageCacheService,
+  CachedPage,
+  PageArtifactSource,
+} from '../../services/page-cache.service';
 import { ThumbnailCacheService } from '../../services/thumbnail-cache.service';
 import { ReaderStateService } from '../../services/reader-state.service';
 import { ZoomPanService } from '../../services/zoom-pan.service';
@@ -65,7 +79,9 @@ interface VerticalPageItem {
         >
           <div class="shortcuts-header">
             <h2>Atajos</h2>
-            <button class="shortcuts-close" (click)="showShortcuts.set(false)" title="Cerrar">Cerrar</button>
+            <button class="shortcuts-close" (click)="showShortcuts.set(false)" title="Cerrar">
+              Cerrar
+            </button>
           </div>
 
           <div class="shortcuts-content">
@@ -95,7 +111,9 @@ interface VerticalPageItem {
               <h2>{{ appMetadata.name }}</h2>
               <p>{{ appMetadata.description }}</p>
             </div>
-            <button class="about-close" (click)="showAbout.set(false)" title="Cerrar">Cerrar</button>
+            <button class="about-close" (click)="showAbout.set(false)" title="Cerrar">
+              Cerrar
+            </button>
           </div>
 
           <div class="about-content">
@@ -125,19 +143,28 @@ interface VerticalPageItem {
         <div class="bookmarks-modal" (click)="$event.stopPropagation()">
           <div class="bookmarks-header">
             <h2>Marcadores</h2>
-            <button class="bookmarks-close" (click)="showBookmarks.set(false)" title="Cerrar">Cerrar</button>
+            <button class="bookmarks-close" (click)="showBookmarks.set(false)" title="Cerrar">
+              Cerrar
+            </button>
           </div>
           <div class="bookmarks-content">
             @if (bookmarks().length === 0) {
               <p class="bookmarks-empty">No hay marcadores para este archivo.</p>
             } @else {
-              @for (bookmark of bookmarks(); track bookmark.id ?? (bookmark.page + ':' + bookmark.createdAt)) {
+              @for (
+                bookmark of bookmarks();
+                track bookmark.id ?? bookmark.page + ':' + bookmark.createdAt
+              ) {
                 <div class="bookmark-row">
                   <button class="bookmark-main" (click)="goToBookmark(bookmark)">
                     <span class="bookmark-name">{{ bookmark.name }}</span>
                     <span class="bookmark-page">Página {{ bookmark.page + 1 }}</span>
                   </button>
-                  <button class="bookmark-delete" (click)="removeBookmark(bookmark, $event)" title="Eliminar marcador">
+                  <button
+                    class="bookmark-delete"
+                    (click)="removeBookmark(bookmark, $event)"
+                    title="Eliminar marcador"
+                  >
                     Eliminar
                   </button>
                 </div>
@@ -149,13 +176,7 @@ interface VerticalPageItem {
     }
 
     @if (isDragOver()) {
-      <div
-        class="drag-drop-overlay"
-        (dragenter)="onDragEnter($event)"
-        (dragover)="onDragOver($event)"
-        (dragleave)="onDragLeave($event)"
-        (drop)="onDrop($event)"
-      ></div>
+      <div class="drag-drop-overlay" aria-hidden="true"></div>
     }
 
     @if (!fileState()) {
@@ -175,9 +196,15 @@ interface VerticalPageItem {
               <h3>Recientes</h3>
               <div class="recent-list">
                 @for (file of recentFiles(); track file.fileHash) {
-                  <button class="recent-item" (click)="openFile(file.filePath)" [title]="file.filePath">
+                  <button
+                    class="recent-item"
+                    (click)="openFile(file.filePath)"
+                    [title]="file.filePath"
+                  >
                     <span class="recent-name">{{ file.fileName }}</span>
-                    <span class="recent-progress">{{ file.currentPage + 1 }}/{{ file.totalPages }}</span>
+                    <span class="recent-progress"
+                      >{{ file.currentPage + 1 }}/{{ file.totalPages }}</span
+                    >
                   </button>
                 }
               </div>
@@ -262,7 +289,8 @@ interface VerticalPageItem {
 
         <div class="page-indicator">
           @if (secondPageUrl()) {
-            {{ currentPageIndex() + 1 }}-{{ currentPageIndex() + 2 }} / {{ fileState()!.totalPages }}
+            {{ currentPageIndex() + 1 }}-{{ currentPageIndex() + 2 }} /
+            {{ fileState()!.totalPages }}
           } @else {
             {{ currentPageIndex() + 1 }} / {{ fileState()!.totalPages }}
           }
@@ -270,7 +298,9 @@ interface VerticalPageItem {
             <span class="zoom-label">{{ zoomPan.getZoomLabel() }}</span>
           }
           @if (zoomPan.hasFilters()) {
-            <span class="filter-label">B:{{ zoomPan.brightness() }} C:{{ zoomPan.contrast() }}</span>
+            <span class="filter-label"
+              >B:{{ zoomPan.brightness() }} C:{{ zoomPan.contrast() }}</span
+            >
           }
           <span class="mode-label">{{ readerState.getReadingModeLabel() }}</span>
         </div>
@@ -314,29 +344,65 @@ interface VerticalPageItem {
       #contextMenu
     />
   `,
+  changeDetection: ChangeDetectionStrategy.Eager,
   styles: `
-    :host { display: block; width: 100%; height: 100%; }
-
-    .viewer-container {
-      width: 100%; height: 100%;
-      display: flex; align-items: center; justify-content: center;
-      background: #1a1a1a; position: relative; overflow: hidden;
-      &.drag-over { background: #2a2a3a; outline: 2px dashed #667; outline-offset: -8px; }
-      &.vertical-mode { align-items: stretch; }
-      &.pannable { cursor: grab; &:active { cursor: grabbing; } }
+    :host {
+      display: block;
+      width: 100%;
+      height: 100%;
     }
 
-    .viewer-reading { cursor: default; }
+    .viewer-container {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #1a1a1a;
+      position: relative;
+      overflow: hidden;
+      &.drag-over {
+        background: #2a2a3a;
+        outline: 2px dashed #667;
+        outline-offset: -8px;
+      }
+      &.vertical-mode {
+        align-items: stretch;
+      }
+      &.pannable {
+        cursor: grab;
+        &:active {
+          cursor: grabbing;
+        }
+      }
+    }
+
+    .viewer-reading {
+      cursor: default;
+    }
 
     .pages-wrapper {
-      display: flex; align-items: center; justify-content: center;
-      height: 100%; width: 100%; gap: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      width: 100%;
+      gap: 0;
       transform-origin: center center;
       will-change: transform, filter;
-      transition: filter 0.15s ease, margin-left 0.2s ease;
-      &.double-layout { gap: 2px; }
-      &.rtl-layout { flex-direction: row-reverse; }
-      &.with-thumbnails { margin-left: 160px; width: calc(100% - 160px); }
+      transition:
+        filter 0.15s ease,
+        margin-left 0.2s ease;
+      &.double-layout {
+        gap: 2px;
+      }
+      &.rtl-layout {
+        flex-direction: row-reverse;
+      }
+      &.with-thumbnails {
+        margin-left: 160px;
+        width: calc(100% - 160px);
+      }
       &.vertical-strip {
         flex-direction: column;
         align-items: center;
@@ -349,44 +415,118 @@ interface VerticalPageItem {
     }
 
     .viewer-welcome {
-      text-align: center; color: #666;
-      h1 { font-size: 2rem; font-weight: 300; margin-bottom: 0.5rem; color: #888; }
-      p { font-size: 0.9rem; margin: 0.25rem 0; }
-      .hint { font-size: 0.8rem; color: #555; margin-top: 1rem; }
+      text-align: center;
+      color: #666;
+      h1 {
+        font-size: 2rem;
+        font-weight: 300;
+        margin-bottom: 0.5rem;
+        color: #888;
+      }
+      p {
+        font-size: 0.9rem;
+        margin: 0.25rem 0;
+      }
+      .hint {
+        font-size: 0.8rem;
+        color: #555;
+        margin-top: 1rem;
+      }
     }
 
     .open-btn {
-      margin-top: 1.5rem; padding: 8px 24px;
-      background: #3a3a3a; color: #ccc;
-      border: 1px solid #555; border-radius: 4px;
-      cursor: pointer; font-size: 0.9rem;
-      &:hover { background: #4a4a4a; color: #fff; }
+      margin-top: 1.5rem;
+      padding: 8px 24px;
+      background: #3a3a3a;
+      color: #ccc;
+      border: 1px solid #555;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      &:hover {
+        background: #4a4a4a;
+        color: #fff;
+      }
     }
 
     .recent-section {
-      margin-top: 2rem; text-align: left; max-width: 400px; width: 100%;
-      h3 { font-size: 0.8rem; color: #777; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+      margin-top: 2rem;
+      text-align: left;
+      max-width: 400px;
+      width: 100%;
+      h3 {
+        font-size: 0.8rem;
+        color: #777;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 8px;
+      }
     }
-    .recent-list { display: flex; flex-direction: column; gap: 2px; }
+    .recent-list {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
     .recent-item {
-      display: flex; justify-content: space-between; align-items: center;
-      padding: 6px 10px; background: transparent; border: none; border-radius: 4px;
-      color: #aaa; cursor: pointer; text-align: left; font-size: 13px;
-      &:hover { background: #2a2a2a; color: #ddd; }
-      .recent-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; margin-right: 8px; }
-      .recent-progress { color: #666; font-size: 11px; flex-shrink: 0; }
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 10px;
+      background: transparent;
+      border: none;
+      border-radius: 4px;
+      color: #aaa;
+      cursor: pointer;
+      text-align: left;
+      font-size: 13px;
+      &:hover {
+        background: #2a2a2a;
+        color: #ddd;
+      }
+      .recent-name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        flex: 1;
+        margin-right: 8px;
+      }
+      .recent-progress {
+        color: #666;
+        font-size: 11px;
+        flex-shrink: 0;
+      }
     }
 
     .viewer-image {
-      user-select: none; display: block;
-      &.fit-width { width: 100%; height: auto; max-height: none; }
-      &.fit-height { height: 100%; width: auto; max-width: none; }
-      &.fit-page { max-width: 100%; max-height: 100%; object-fit: contain; }
-      &.fit-original { /* no constraints */ }
+      user-select: none;
+      display: block;
+      &.fit-width {
+        width: 100%;
+        height: auto;
+        max-height: none;
+      }
+      &.fit-height {
+        height: 100%;
+        width: auto;
+        max-width: none;
+      }
+      &.fit-page {
+        max-width: 100%;
+        max-height: 100%;
+        object-fit: contain;
+      }
+      &.fit-original {
+        /* no constraints */
+      }
     }
     .double-layout .viewer-image {
-      &.fit-width { width: 50%; }
-      &.fit-page { max-width: 50%; }
+      &.fit-width {
+        width: 50%;
+      }
+      &.fit-page {
+        max-width: 50%;
+      }
     }
     .vertical-page {
       width: min(100%, 980px);
@@ -416,38 +556,86 @@ interface VerticalPageItem {
     }
 
     .page-indicator {
-      position: absolute; bottom: 8px; right: 12px;
-      background: rgba(0, 0, 0, 0.6); color: #aaa;
-      padding: 2px 8px; border-radius: 4px; font-size: 12px;
-      pointer-events: none; display: flex; gap: 8px; z-index: 5;
-      .mode-label { color: #777; }
-      .zoom-label { color: #8af; }
-      .filter-label { color: #fa8; }
+      position: absolute;
+      bottom: 8px;
+      right: 12px;
+      background: rgba(0, 0, 0, 0.6);
+      color: #aaa;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      pointer-events: none;
+      display: flex;
+      gap: 8px;
+      z-index: 5;
+      .mode-label {
+        color: #777;
+      }
+      .zoom-label {
+        color: #8af;
+      }
+      .filter-label {
+        color: #fa8;
+      }
     }
 
     .viewer-overlay {
-      position: absolute; inset: 0; display: flex; align-items: center;
-      justify-content: center; background: rgba(0, 0, 0, 0.7); z-index: 10;
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.7);
+      z-index: 10;
     }
     .drag-drop-overlay {
+      // Keep the native drop target stable; window listeners handle the drag.
+      pointer-events: none;
       position: fixed;
       inset: 0;
       z-index: 60;
     }
     .viewer-loading {
-      color: #aaa; font-size: 1.1rem;
-      display: flex; flex-direction: column; align-items: center; gap: 12px;
-      p { margin: 0; }
+      color: #aaa;
+      font-size: 1.1rem;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      p {
+        margin: 0;
+      }
     }
     .loading-cancel {
-      padding: 6px 14px; background: #2f2f2f; color: #ddd;
-      border: 1px solid #555; border-radius: 4px; cursor: pointer;
-      &:hover { background: #3b3b3b; }
+      padding: 6px 14px;
+      background: #2f2f2f;
+      color: #ddd;
+      border: 1px solid #555;
+      border-radius: 4px;
+      cursor: pointer;
+      &:hover {
+        background: #3b3b3b;
+      }
     }
     .viewer-error {
-      text-align: center; color: #e55;
-      p { margin-bottom: 1rem; max-width: 400px; white-space: pre-wrap; }
-      button { padding: 6px 16px; background: #3a3a3a; color: #ccc; border: 1px solid #555; border-radius: 4px; cursor: pointer; &:hover { background: #4a4a4a; } }
+      text-align: center;
+      color: #e55;
+      p {
+        margin-bottom: 1rem;
+        max-width: 400px;
+        white-space: pre-wrap;
+      }
+      button {
+        padding: 6px 16px;
+        background: #3a3a3a;
+        color: #ccc;
+        border: 1px solid #555;
+        border-radius: 4px;
+        cursor: pointer;
+        &:hover {
+          background: #4a4a4a;
+        }
+      }
     }
     .shortcuts-modal {
       width: min(720px, calc(100vw - 32px));
@@ -465,12 +653,23 @@ interface VerticalPageItem {
       justify-content: space-between;
       padding: 16px 18px 12px;
       border-bottom: 1px solid #3a3a3a;
-      h2 { margin: 0; font-size: 1.05rem; font-weight: 600; color: #f0f0f0; }
+      h2 {
+        margin: 0;
+        font-size: 1.05rem;
+        font-weight: 600;
+        color: #f0f0f0;
+      }
     }
     .shortcuts-close {
-      padding: 6px 12px; background: #333; color: #ddd;
-      border: 1px solid #555; border-radius: 6px; cursor: pointer;
-      &:hover { background: #3d3d3d; }
+      padding: 6px 12px;
+      background: #333;
+      color: #ddd;
+      border: 1px solid #555;
+      border-radius: 6px;
+      cursor: pointer;
+      &:hover {
+        background: #3d3d3d;
+      }
     }
     .shortcuts-content {
       padding: 14px 18px 18px;
@@ -533,13 +732,27 @@ interface VerticalPageItem {
       gap: 16px;
       padding: 16px 18px 12px;
       border-bottom: 1px solid #3a3a3a;
-      h2 { margin: 0 0 4px; font-size: 1.1rem; color: #f4f4f4; }
-      p { margin: 0; color: #aaa; font-size: 0.95rem; }
+      h2 {
+        margin: 0 0 4px;
+        font-size: 1.1rem;
+        color: #f4f4f4;
+      }
+      p {
+        margin: 0;
+        color: #aaa;
+        font-size: 0.95rem;
+      }
     }
     .about-close {
-      padding: 6px 12px; background: #333; color: #ddd;
-      border: 1px solid #555; border-radius: 6px; cursor: pointer;
-      &:hover { background: #3d3d3d; }
+      padding: 6px 12px;
+      background: #333;
+      color: #ddd;
+      border: 1px solid #555;
+      border-radius: 6px;
+      cursor: pointer;
+      &:hover {
+        background: #3d3d3d;
+      }
     }
     .about-content {
       padding: 16px 18px 18px;
@@ -594,13 +807,24 @@ interface VerticalPageItem {
       justify-content: space-between;
       padding: 16px 18px 12px;
       border-bottom: 1px solid #3a3a3a;
-      h2 { margin: 0; font-size: 1.05rem; font-weight: 600; color: #f0f0f0; }
+      h2 {
+        margin: 0;
+        font-size: 1.05rem;
+        font-weight: 600;
+        color: #f0f0f0;
+      }
     }
     .bookmarks-close,
     .bookmark-delete {
-      padding: 6px 12px; background: #333; color: #ddd;
-      border: 1px solid #555; border-radius: 6px; cursor: pointer;
-      &:hover { background: #3d3d3d; }
+      padding: 6px 12px;
+      background: #333;
+      color: #ddd;
+      border: 1px solid #555;
+      border-radius: 6px;
+      cursor: pointer;
+      &:hover {
+        background: #3d3d3d;
+      }
     }
     .bookmarks-content {
       padding: 14px 18px 18px;
@@ -645,15 +869,44 @@ interface VerticalPageItem {
       white-space: nowrap;
     }
     .goto-overlay {
-      position: absolute; inset: 0; display: flex; align-items: center;
-      justify-content: center; background: rgba(0, 0, 0, 0.5); z-index: 20;
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 20;
     }
     .goto-dialog {
-      background: #2b2b2b; padding: 16px 20px; border-radius: 8px;
-      display: flex; align-items: center; gap: 8px; border: 1px solid #444;
-      label { color: #aaa; font-size: 0.9rem; }
-      input { width: 80px; padding: 4px 8px; background: #1a1a1a; color: #eee; border: 1px solid #555; border-radius: 4px; font-size: 1rem; text-align: center; outline: none; &:focus { border-color: #777; } }
-      .goto-total { color: #777; font-size: 0.9rem; }
+      background: #2b2b2b;
+      padding: 16px 20px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid #444;
+      label {
+        color: #aaa;
+        font-size: 0.9rem;
+      }
+      input {
+        width: 80px;
+        padding: 4px 8px;
+        background: #1a1a1a;
+        color: #eee;
+        border: 1px solid #555;
+        border-radius: 4px;
+        font-size: 1rem;
+        text-align: center;
+        outline: none;
+        &:focus {
+          border-color: #777;
+        }
+      }
+      .goto-total {
+        color: #777;
+        font-size: 0.9rem;
+      }
     }
   `,
 })
@@ -683,10 +936,41 @@ export class ViewerComponent implements OnInit, OnDestroy {
   shortcutSections = computed<ShortcutSection[]>(() => {
     const groups: Array<{ title: string; actions: string[] }> = [
       { title: 'Archivo', actions: ['open-file', 'close-file', 'new-window'] },
-      { title: 'Navegacion', actions: ['next-page', 'prev-page', 'next-page-alt', 'prev-page-alt', 'next-page-alt2', 'first-page', 'last-page', 'goto-page'] },
+      {
+        title: 'Navegacion',
+        actions: [
+          'next-page',
+          'prev-page',
+          'next-page-alt',
+          'prev-page-alt',
+          'next-page-alt2',
+          'first-page',
+          'last-page',
+          'goto-page',
+        ],
+      },
       { title: 'Zoom', actions: ['zoom-in', 'zoom-out', 'zoom-reset'] },
-      { title: 'Filtros', actions: ['brightness-up', 'brightness-down', 'contrast-up', 'contrast-down', 'reset-filters'] },
-      { title: 'Vista', actions: ['cycle-reading-mode', 'toggle-page-layout', 'cycle-fit-mode', 'toggle-thumbnails', 'toggle-fullscreen', 'add-bookmark'] },
+      {
+        title: 'Filtros',
+        actions: [
+          'brightness-up',
+          'brightness-down',
+          'contrast-up',
+          'contrast-down',
+          'reset-filters',
+        ],
+      },
+      {
+        title: 'Vista',
+        actions: [
+          'cycle-reading-mode',
+          'toggle-page-layout',
+          'cycle-fit-mode',
+          'toggle-thumbnails',
+          'toggle-fullscreen',
+          'add-bookmark',
+        ],
+      },
     ];
     const bindings = this.shortcuts();
     return groups
@@ -705,6 +989,9 @@ export class ViewerComponent implements OnInit, OnDestroy {
   private lastPanY = 0;
   private openingFileHash: string | null = null;
   private openingSessionId: string | null = null;
+  private openGeneration = 0;
+  private pendingOpenRequest: object | null = null;
+  private openRequestQueue: Promise<void> = Promise.resolve();
   private previewInitializedHash: string | null = null;
   private currentImageRetryKey: string | null = null;
   private secondImageRetryKey: string | null = null;
@@ -715,9 +1002,11 @@ export class ViewerComponent implements OnInit, OnDestroy {
   private verticalScrollFramePending = false;
 
   isDoublePage = computed(() => {
-    return this.readerState.pageLayout() === 'double'
-      && this.secondPageUrl() !== null
-      && !this.readerState.isVertical();
+    return (
+      this.readerState.pageLayout() === 'double' &&
+      this.secondPageUrl() !== null &&
+      !this.readerState.isVertical()
+    );
   });
 
   canPanReader = computed(() => {
@@ -744,17 +1033,22 @@ export class ViewerComponent implements OnInit, OnDestroy {
         index,
         ready,
         url: ready && inWindow ? this.buildPageUrl(index, source) : null,
-        aspectRatio: meta && meta.width > 0 && meta.height > 0 ? `${meta.width} / ${meta.height}` : null,
+        aspectRatio:
+          meta && meta.width > 0 && meta.height > 0 ? `${meta.width} / ${meta.height}` : null,
       };
     });
   });
 
   fitClass = computed(() => {
     switch (this.readerState.fitMode()) {
-      case 'fit-width': return 'fit-width';
-      case 'fit-height': return 'fit-height';
-      case 'fit-page': return 'fit-page';
-      case 'original': return 'fit-original';
+      case 'fit-width':
+        return 'fit-width';
+      case 'fit-height':
+        return 'fit-height';
+      case 'fit-page':
+        return 'fit-page';
+      case 'original':
+        return 'fit-original';
     }
   });
 
@@ -815,6 +1109,9 @@ export class ViewerComponent implements OnInit, OnDestroy {
 
   private handleWorkerEvent(event: any): void {
     const hash = event.fileHash;
+    const generation = this.openGeneration;
+    const sessionId = this.openingSessionId ?? this.fileState()?.sessionId;
+    if (event.sessionId && event.sessionId !== sessionId) return;
     if (hash !== this.openingFileHash && hash !== this.fileState()?.fileHash) return;
 
     switch (event.type) {
@@ -829,12 +1126,24 @@ export class ViewerComponent implements OnInit, OnDestroy {
       case 'archive':
         void this.refreshManifest(hash);
         queueMicrotask(() => {
+          if (generation !== this.openGeneration) return;
           this.bumpVerticalRenderVersion();
           void this.completeOpen(hash, event.totalPages);
         });
         break;
 
       case 'ready':
+        // The first ready event must initialize caches even when the polling
+        // fallback expired. The normal current-page path assumes initialized caches.
+        if (
+          this.loading() &&
+          this.openingFileHash === hash &&
+          event.page === 0 &&
+          this.previewInitializedHash !== hash
+        ) {
+          void this.initializePreview(hash, event.page);
+          break;
+        }
         void this.refreshManifest(hash);
         // A page is available on disk
         this.pageCache.markReady(event.page);
@@ -848,8 +1157,6 @@ export class ViewerComponent implements OnInit, OnDestroy {
           this.currentPageMeta = this.pageCache.getPageMeta(event.page, this.pageSource());
           this.currentImageRetryKey = null;
           this.loadSecondPage(event.page);
-        } else if (this.loading() && this.openingFileHash === hash && event.page === 0) {
-          void this.initializePreview(hash, event.page);
         }
         break;
 
@@ -862,7 +1169,13 @@ export class ViewerComponent implements OnInit, OnDestroy {
         break;
 
       case 'error':
-        if (this.loading()) {
+        if (Number.isInteger(event.page) && event.page >= 0) {
+          // A page failure has a placeholder; the rest of the book remains usable.
+          console.warn('Page could not be decoded:', event.page, event.message);
+          break;
+        }
+        {
+          this.closeCurrentFile('worker-error');
           this.loading.set(false);
           this.error.set(humanizeWorkerError(event.message));
           this.openingFileHash = null;
@@ -878,29 +1191,49 @@ export class ViewerComponent implements OnInit, OnDestroy {
   }
 
   private async completeOpen(fileHash: string, totalPages: number): Promise<void> {
+    const generation = this.openGeneration;
+    const sessionId = this.fileState()?.sessionId;
+    const isCurrent = () =>
+      generation === this.openGeneration &&
+      this.fileState()?.fileHash === fileHash &&
+      this.fileState()?.sessionId === sessionId;
+    if (!isCurrent()) return;
     this.openingFileHash = null;
     this.openingSessionId = null;
 
     const settings = await this.electron.getSettings();
+    if (!isCurrent()) return;
     this.readerState.applySettings(settings);
     if (this.previewInitializedHash !== fileHash) {
-      this.pageCache.init(fileHash, totalPages, settings.slidingWindowSize, settings.slidingWindowSize);
+      this.pageCache.init(
+        fileHash,
+        totalPages,
+        settings.slidingWindowSize,
+        settings.slidingWindowSize,
+      );
       this.thumbnailCache.init(fileHash);
     } else {
-      this.pageCache.init(fileHash, totalPages, this.pageCache.windowBefore, this.pageCache.windowAfter);
+      this.pageCache.init(
+        fileHash,
+        totalPages,
+        this.pageCache.windowBefore,
+        this.pageCache.windowAfter,
+      );
       this.thumbnailCache.init(fileHash);
       this.previewInitializedHash = null;
     }
     await this.refreshManifest(fileHash);
+    if (!isCurrent()) return;
 
     // Recover ready state for pages the worker already processed (preview or
     // early processing) whose "ready" events were lost during cache re-init.
     this.pageCache.syncReadyFromManifest();
     this.thumbnailCache.syncReadyFromManifest(this.pageCache.manifestPages);
 
-    this.fileState.update(s => s ? { ...s, totalPages } : s);
+    this.fileState.update((s) => (s ? { ...s, totalPages } : s));
 
     const progress = await this.electron.getProgress(fileHash);
+    if (!isCurrent()) return;
     const startPage = progress ? progress.currentPage : 0;
 
     this.loading.set(false);
@@ -912,7 +1245,9 @@ export class ViewerComponent implements OnInit, OnDestroy {
 
   // --- Context menu ---
 
-  onContextMenu(event: MouseEvent): void { this.contextMenu.open(event); }
+  onContextMenu(event: MouseEvent): void {
+    this.contextMenu.open(event);
+  }
 
   onMenuAction(action: ContextMenuAction): void {
     switch (action.type) {
@@ -959,10 +1294,13 @@ export class ViewerComponent implements OnInit, OnDestroy {
     }
 
     const actionMap: Record<string, string> = {
-      'open-file': 'open-file', 'new-window': 'new-window',
-      'thumbnails': 'toggle-thumbnails', 'goto-page': 'goto-page',
-      'reset-filters': 'reset-filters', 'close-file': 'close-file',
-      'fullscreen': 'toggle-fullscreen',
+      'open-file': 'open-file',
+      'new-window': 'new-window',
+      thumbnails: 'toggle-thumbnails',
+      'goto-page': 'goto-page',
+      'reset-filters': 'reset-filters',
+      'close-file': 'close-file',
+      fullscreen: 'toggle-fullscreen',
       'add-bookmark': 'add-bookmark',
     };
     const mapped = actionMap[action.type];
@@ -973,7 +1311,8 @@ export class ViewerComponent implements OnInit, OnDestroy {
     const state = this.fileState();
     if (!state) return;
     await this.electron.addBookmark({
-      fileHash: state.fileHash, page: this.currentPageIndex(),
+      fileHash: state.fileHash,
+      page: this.currentPageIndex(),
       name: `Página ${this.currentPageIndex() + 1}`,
       createdAt: new Date().toISOString(),
     });
@@ -1013,25 +1352,56 @@ export class ViewerComponent implements OnInit, OnDestroy {
       return;
     }
     if (event.key === 'Escape') {
-      if (this.showAbout()) { this.showAbout.set(false); return; }
-      if (this.showBookmarks()) { this.showBookmarks.set(false); return; }
-      if (this.showShortcuts()) { this.showShortcuts.set(false); return; }
-      if (this.showGoToPage()) { this.showGoToPage.set(false); return; }
-      if (this.showThumbnails()) { this.showThumbnails.set(false); return; }
+      if (this.showAbout()) {
+        this.showAbout.set(false);
+        return;
+      }
+      if (this.showBookmarks()) {
+        this.showBookmarks.set(false);
+        return;
+      }
+      if (this.showShortcuts()) {
+        this.showShortcuts.set(false);
+        return;
+      }
+      if (this.showGoToPage()) {
+        this.showGoToPage.set(false);
+        return;
+      }
+      if (this.showThumbnails()) {
+        this.showThumbnails.set(false);
+        return;
+      }
       return;
     }
     if (this.showGoToPage()) return;
 
     const action = this.keybindings.match(event);
-    if (action) { event.preventDefault(); this.executeAction(action); return; }
+    if (action) {
+      event.preventDefault();
+      this.executeAction(action);
+      return;
+    }
 
     if (this.fileState() && this.canPanReader() && !event.ctrlKey && !event.shiftKey) {
       const S = 50;
       switch (event.key) {
-        case 'ArrowRight': event.preventDefault(); this.zoomPan.pan(-S, 0, this.readerState.fitMode() === 'original'); return;
-        case 'ArrowLeft': event.preventDefault(); this.zoomPan.pan(S, 0, this.readerState.fitMode() === 'original'); return;
-        case 'ArrowDown': event.preventDefault(); this.zoomPan.pan(0, -S, this.readerState.fitMode() === 'original'); return;
-        case 'ArrowUp': event.preventDefault(); this.zoomPan.pan(0, S, this.readerState.fitMode() === 'original'); return;
+        case 'ArrowRight':
+          event.preventDefault();
+          this.zoomPan.pan(-S, 0, this.readerState.fitMode() === 'original');
+          return;
+        case 'ArrowLeft':
+          event.preventDefault();
+          this.zoomPan.pan(S, 0, this.readerState.fitMode() === 'original');
+          return;
+        case 'ArrowDown':
+          event.preventDefault();
+          this.zoomPan.pan(0, -S, this.readerState.fitMode() === 'original');
+          return;
+        case 'ArrowUp':
+          event.preventDefault();
+          this.zoomPan.pan(0, S, this.readerState.fitMode() === 'original');
+          return;
       }
     }
   }
@@ -1041,35 +1411,76 @@ export class ViewerComponent implements OnInit, OnDestroy {
     const isVertical = this.readerState.isVertical();
 
     switch (action) {
-      case 'open-file': this.openFileDialog(); break;
-      case 'close-file': this.closeCurrentFile('manual'); break;
-      case 'new-window': this.electron.newWindow(); break;
+      case 'open-file':
+        this.openFileDialog();
+        break;
+      case 'close-file':
+        this.closeCurrentFile('manual');
+        break;
+      case 'new-window':
+        this.electron.newWindow();
+        break;
       case 'next-page':
         if (!this.fileState()) break;
-        if (!isVertical) { isReversed ? this.prevPage() : this.nextPage(); } else { this.nextPage(); }
+        if (!isVertical) {
+          isReversed ? this.prevPage() : this.nextPage();
+        } else {
+          this.nextPage();
+        }
         break;
       case 'prev-page':
         if (!this.fileState()) break;
-        if (!isVertical) { isReversed ? this.nextPage() : this.prevPage(); } else { this.prevPage(); }
+        if (!isVertical) {
+          isReversed ? this.nextPage() : this.prevPage();
+        } else {
+          this.prevPage();
+        }
         break;
-      case 'next-page-alt': case 'next-page-alt2': this.nextPage(); break;
-      case 'prev-page-alt': this.prevPage(); break;
-      case 'first-page': this.goToPage(0); break;
-      case 'last-page': this.goToPage((this.fileState()?.totalPages ?? 1) - 1); break;
+      case 'next-page-alt':
+      case 'next-page-alt2':
+        this.nextPage();
+        break;
+      case 'prev-page-alt':
+        this.prevPage();
+        break;
+      case 'first-page':
+        this.goToPage(0);
+        break;
+      case 'last-page':
+        this.goToPage((this.fileState()?.totalPages ?? 1) - 1);
+        break;
       case 'goto-page':
         if (this.fileState()) {
           this.showGoToPage.set(true);
-          setTimeout(() => { (document.querySelector('.goto-dialog input') as HTMLInputElement)?.select(); }, 0);
+          setTimeout(() => {
+            (document.querySelector('.goto-dialog input') as HTMLInputElement)?.select();
+          }, 0);
         }
         break;
-      case 'zoom-in': this.zoomPan.zoomIn(); break;
-      case 'zoom-out': this.zoomPan.zoomOut(); break;
-      case 'zoom-reset': this.zoomPan.resetZoom(); break;
-      case 'brightness-up': this.zoomPan.adjustBrightness(5); break;
-      case 'brightness-down': this.zoomPan.adjustBrightness(-5); break;
-      case 'contrast-up': this.zoomPan.adjustContrast(5); break;
-      case 'contrast-down': this.zoomPan.adjustContrast(-5); break;
-      case 'reset-filters': this.zoomPan.resetFilters(); break;
+      case 'zoom-in':
+        this.zoomPan.zoomIn();
+        break;
+      case 'zoom-out':
+        this.zoomPan.zoomOut();
+        break;
+      case 'zoom-reset':
+        this.zoomPan.resetZoom();
+        break;
+      case 'brightness-up':
+        this.zoomPan.adjustBrightness(5);
+        break;
+      case 'brightness-down':
+        this.zoomPan.adjustBrightness(-5);
+        break;
+      case 'contrast-up':
+        this.zoomPan.adjustContrast(5);
+        break;
+      case 'contrast-down':
+        this.zoomPan.adjustContrast(-5);
+        break;
+      case 'reset-filters':
+        this.zoomPan.resetFilters();
+        break;
       case 'cycle-reading-mode': {
         const mode = this.readerState.cycleReadingMode();
         if (mode === 'vertical') {
@@ -1082,11 +1493,24 @@ export class ViewerComponent implements OnInit, OnDestroy {
         this.persistSettings();
         break;
       }
-      case 'toggle-page-layout': this.readerState.togglePageLayout(); this.refreshCurrentPage(); this.persistSettings(); break;
-      case 'cycle-fit-mode': this.readerState.cycleFitMode(); this.persistSettings(); break;
-      case 'toggle-thumbnails': this.showThumbnails.update(v => !v); break;
-      case 'toggle-fullscreen': this.electron.toggleFullscreen(); break;
-      case 'add-bookmark': this.addBookmark(); break;
+      case 'toggle-page-layout':
+        this.readerState.togglePageLayout();
+        this.refreshCurrentPage();
+        this.persistSettings();
+        break;
+      case 'cycle-fit-mode':
+        this.readerState.cycleFitMode();
+        this.persistSettings();
+        break;
+      case 'toggle-thumbnails':
+        this.showThumbnails.update((v) => !v);
+        break;
+      case 'toggle-fullscreen':
+        this.electron.toggleFullscreen();
+        break;
+      case 'add-bookmark':
+        this.addBookmark();
+        break;
     }
   }
 
@@ -1094,10 +1518,22 @@ export class ViewerComponent implements OnInit, OnDestroy {
 
   @HostListener('click', ['$event'])
   onClick(event: MouseEvent): void {
-    if (!this.fileState() || this.showGoToPage() || this.canPanReader() || this.readerState.isVertical()) return;
+    if (
+      !this.fileState() ||
+      this.showGoToPage() ||
+      this.canPanReader() ||
+      this.readerState.isVertical()
+    )
+      return;
     const target = event.target as HTMLElement;
-    if (target.tagName === 'BUTTON' || target.tagName === 'INPUT' ||
-        target.closest('app-thumbnails') || target.closest('app-toolbar') || target.closest('app-context-menu')) return;
+    if (
+      target.tagName === 'BUTTON' ||
+      target.tagName === 'INPUT' ||
+      target.closest('app-thumbnails') ||
+      target.closest('app-toolbar') ||
+      target.closest('app-context-menu')
+    )
+      return;
 
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
     if (this.readerState.isForwardClick(event.clientX - rect.left, rect.width)) {
@@ -1115,7 +1551,13 @@ export class ViewerComponent implements OnInit, OnDestroy {
       const c = this.viewerContainer?.nativeElement;
       if (!c) return;
       const r = c.getBoundingClientRect();
-      this.zoomPan.zoomAtPoint(event.deltaY > 0 ? -0.1 : 0.1, event.clientX - r.left, event.clientY - r.top, r.width, r.height);
+      this.zoomPan.zoomAtPoint(
+        event.deltaY > 0 ? -0.1 : 0.1,
+        event.clientX - r.left,
+        event.clientY - r.top,
+        r.width,
+        r.height,
+      );
       return;
     }
     if (this.readerState.isVertical()) {
@@ -1131,7 +1573,10 @@ export class ViewerComponent implements OnInit, OnDestroy {
   // --- Pan ---
   onPanStart(event: MouseEvent): void {
     if (!this.canPanReader() || event.button !== 0) return;
-    this.isPanning = true; this.lastPanX = event.clientX; this.lastPanY = event.clientY; event.preventDefault();
+    this.isPanning = true;
+    this.lastPanX = event.clientX;
+    this.lastPanY = event.clientY;
+    event.preventDefault();
   }
   onPanMove(event: MouseEvent): void {
     if (!this.isPanning) return;
@@ -1140,9 +1585,12 @@ export class ViewerComponent implements OnInit, OnDestroy {
       event.clientY - this.lastPanY,
       this.readerState.fitMode() === 'original',
     );
-    this.lastPanX = event.clientX; this.lastPanY = event.clientY;
+    this.lastPanX = event.clientX;
+    this.lastPanY = event.clientY;
   }
-  onPanEnd(): void { this.isPanning = false; }
+  onPanEnd(): void {
+    this.isPanning = false;
+  }
 
   onViewerScroll(): void {
     if (!this.readerState.isVertical() || this.verticalScrollFramePending) return;
@@ -1173,24 +1621,6 @@ export class ViewerComponent implements OnInit, OnDestroy {
     this.handleGlobalDrop(event);
   }
 
-  // --- Drag & Drop ---
-  onDragEnter(event: DragEvent): void {
-    this.handleGlobalDragEnter(event);
-  }
-
-  onDragOver(event: DragEvent): void {
-    this.handleGlobalDragOver(event);
-  }
-
-  onDragLeave(event: DragEvent): void {
-    this.handleGlobalDragLeave(event);
-  }
-
-  onDrop(event: DragEvent): void {
-    event.stopPropagation(); // Prevent window:drop from also firing
-    this.handleGlobalDrop(event);
-  }
-
   // --- File operations ---
 
   async openFileDialog(): Promise<void> {
@@ -1204,6 +1634,9 @@ export class ViewerComponent implements OnInit, OnDestroy {
   }
 
   cancelOpen(): void {
+    this.pendingOpenRequest = null;
+    this.openGeneration++;
+    this.loading.set(false);
     if (this.openingFileHash) {
       this.electron.workerClose(this.openingFileHash, {
         sessionId: this.openingSessionId ?? undefined,
@@ -1220,15 +1653,54 @@ export class ViewerComponent implements OnInit, OnDestroy {
   }
 
   async openFile(filePath: string): Promise<void> {
-    if (this.openingFileHash) { this.cancelOpen(); }
-    this.closeCurrentFile('open-replace');
+    if (this.fileState()?.filePath === filePath) return;
+    const request = {};
+    this.pendingOpenRequest = request;
 
-    this.loading.set(true);
-    this.loadingMessage.set('Preparando archivo...');
+    // Finish adopting or discarding the previous IPC response before requesting
+    // another session. Main may otherwise return the same still-pending session
+    // to both requests, which an obsolete response would then close.
+    const previous = this.openRequestQueue;
+    let release!: () => void;
+    this.openRequestQueue = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    try {
+      await previous;
+      if (request !== this.pendingOpenRequest) return;
+      await this.performOpen(filePath, request);
+    } finally {
+      release();
+    }
+  }
+
+  private async performOpen(filePath: string, request: object): Promise<void> {
+    if (!this.fileState()) {
+      this.loading.set(true);
+      this.loadingMessage.set('Preparando archivo...');
+    }
     this.error.set(null);
 
     try {
       const result = await this.electron.workerStart(filePath);
+      if (request !== this.pendingOpenRequest) {
+        if (!result.alreadyOpen)
+          this.electron.workerClose(result.fileHash, {
+            sessionId: result.sessionId,
+            reason: 'superseded-open',
+          });
+        return;
+      }
+      if (
+        result.redirected ||
+        (result.alreadyOpen && this.fileState()?.sessionId === result.sessionId)
+      ) {
+        if (!this.fileState()) this.loading.set(false);
+        return;
+      }
+      this.closeCurrentFile('open-replace');
+      this.pendingOpenRequest = request;
+      this.loading.set(true);
       this.openingFileHash = result.fileHash;
       this.openingSessionId = result.sessionId;
 
@@ -1247,10 +1719,14 @@ export class ViewerComponent implements OnInit, OnDestroy {
       }
       // Otherwise, wait for "archive" event from worker
     } catch (err: any) {
+      if (request !== this.pendingOpenRequest) return;
+      this.closeCurrentFile('open-error');
       this.loading.set(false);
       if (err.message?.includes('FILE_NOT_FOUND')) {
         const name = filePath.split(/[\\/]/).pop() ?? filePath;
-        this.error.set(`No se encontró "${name}".\n\nEs posible que haya sido movido, renombrado o eliminado.`);
+        this.error.set(
+          `No se encontró "${name}".\n\nEs posible que haya sido movido, renombrado o eliminado.`,
+        );
         this.electron.removeRecentFile(filePath).catch(() => {});
         this.loadRecentFiles();
       } else {
@@ -1298,7 +1774,9 @@ export class ViewerComponent implements OnInit, OnDestroy {
       this.currentImageRetryKey = null;
       this.clearPageReadyRetry();
       if (this.readerState.isVertical()) {
-        this.currentPageUrl.set(this.pageCache.isReady(index) ? this.buildPageUrl(index, this.pageSource()) : null);
+        this.currentPageUrl.set(
+          this.pageCache.isReady(index) ? this.buildPageUrl(index, this.pageSource()) : null,
+        );
         this.secondPageUrl.set(null);
         this.zoomPan.resetOnPageChange();
         this.scrollVerticalPageIntoView(index);
@@ -1319,7 +1797,9 @@ export class ViewerComponent implements OnInit, OnDestroy {
     }
   }
 
-  clearError(): void { this.error.set(null); }
+  clearError(): void {
+    this.error.set(null);
+  }
 
   formatShortcut(value: string): string {
     return value === ' ' ? 'Espacio' : value;
@@ -1337,12 +1817,18 @@ export class ViewerComponent implements OnInit, OnDestroy {
       this.secondPageUrl.set(null);
       return;
     }
-    if (this.currentPageMeta && this.readerState.isSpread(this.currentPageMeta.width, this.currentPageMeta.height)) {
+    if (
+      this.currentPageMeta &&
+      this.readerState.isSpread(this.currentPageMeta.width, this.currentPageMeta.height)
+    ) {
       this.secondPageUrl.set(null);
       return;
     }
     const secondIndex = firstIndex + 1;
-    if (secondIndex >= s.totalPages) { this.secondPageUrl.set(null); return; }
+    if (secondIndex >= s.totalPages) {
+      this.secondPageUrl.set(null);
+      return;
+    }
 
     const secondMeta = this.pageCache.getPageMeta(secondIndex, this.pageSource());
     if (secondMeta && this.readerState.isSpread(secondMeta.width, secondMeta.height)) {
@@ -1358,16 +1844,20 @@ export class ViewerComponent implements OnInit, OnDestroy {
   }
 
   private getNavigationStep(): number {
-    const isSpread = this.currentPageMeta ? this.readerState.isSpread(this.currentPageMeta.width, this.currentPageMeta.height) : false;
+    const isSpread = this.currentPageMeta
+      ? this.readerState.isSpread(this.currentPageMeta.width, this.currentPageMeta.height)
+      : false;
     return this.readerState.getStep(isSpread);
   }
 
   private refreshCurrentPage(): void {
     this.navigating = false;
     if (this.readerState.isVertical()) {
-      this.currentPageUrl.set(this.pageCache.isReady(this.currentPageIndex())
-        ? this.buildPageUrl(this.currentPageIndex(), this.pageSource())
-        : null);
+      this.currentPageUrl.set(
+        this.pageCache.isReady(this.currentPageIndex())
+          ? this.buildPageUrl(this.currentPageIndex(), this.pageSource())
+          : null,
+      );
       this.secondPageUrl.set(null);
       this.currentPageMeta = this.pageCache.getPageMeta(this.currentPageIndex(), this.pageSource());
       this.bumpVerticalRenderVersion();
@@ -1396,6 +1886,12 @@ export class ViewerComponent implements OnInit, OnDestroy {
   }
 
   private closeCurrentFile(reason = 'manual'): void {
+    this.pendingOpenRequest = null;
+    this.openGeneration++;
+    this.openingFileHash = null;
+    this.clearPreviewProbe();
+    this.clearPageReadyRetry();
+    this.loading.set(false);
     const s = this.fileState();
     this.clearPostCloseDiagnostics();
     if (s) {
@@ -1444,7 +1940,11 @@ export class ViewerComponent implements OnInit, OnDestroy {
   }
 
   private async loadRecentFiles(): Promise<void> {
-    try { this.recentFiles.set(await this.electron.getRecentFiles()); } catch { /* ignore */ }
+    try {
+      this.recentFiles.set(await this.electron.getRecentFiles());
+    } catch {
+      /* ignore */
+    }
   }
 
   private async loadBookmarks(fileHash: string): Promise<void> {
@@ -1473,10 +1973,11 @@ export class ViewerComponent implements OnInit, OnDestroy {
 
     const types = event.dataTransfer?.types;
     if (!types) return false;
-    return Array.from(types).some((type) =>
-      type === 'Files' ||
-      type.toLowerCase().includes('file') ||
-      type === 'application/x-moz-file'
+    return Array.from(types).some(
+      (type) =>
+        type === 'Files' ||
+        type.toLowerCase().includes('file') ||
+        type === 'application/x-moz-file',
     );
   }
 
@@ -1527,8 +2028,10 @@ export class ViewerComponent implements OnInit, OnDestroy {
 
   private saveProgress(state: FileState, page: number): void {
     this.electron.saveProgress({
-      fileHash: state.fileHash, filePath: state.filePath,
-      currentPage: page, totalPages: state.totalPages,
+      fileHash: state.fileHash,
+      filePath: state.filePath,
+      currentPage: page,
+      totalPages: state.totalPages,
       lastRead: new Date().toISOString(),
     });
   }
@@ -1542,8 +2045,10 @@ export class ViewerComponent implements OnInit, OnDestroy {
   }
 
   private async refreshManifest(fileHash: string): Promise<void> {
+    const generation = this.openGeneration;
     try {
       const manifest = await this.electron.getWorkerManifest(fileHash);
+      if (generation !== this.openGeneration || this.fileState()?.fileHash !== fileHash) return;
       if (manifest?.pages) {
         this.pageCache.updateManifest(manifest.pages);
         this.bumpVerticalRenderVersion();
@@ -1555,19 +2060,26 @@ export class ViewerComponent implements OnInit, OnDestroy {
 
   private async initializePreview(fileHash: string, pageIndex: number): Promise<void> {
     if (this.previewInitializedHash === fileHash) return;
+    const generation = this.openGeneration;
 
     const settings = await this.electron.getSettings();
     // Re-check after the await: completeOpen() clears openingFileHash synchronously at its
     // very start (before its own first await).  If it already started, the full-open cache
     // state is either set or about to be set — clobbering it with a 1-page init would break
     // navigation for the rest of the session.
-    if (this.openingFileHash !== fileHash) return;
+    if (generation !== this.openGeneration || this.openingFileHash !== fileHash) return;
     this.readerState.applySettings(settings);
-    this.pageCache.init(fileHash, Math.max(pageIndex + 1, 1), settings.slidingWindowSize, settings.slidingWindowSize);
+    this.pageCache.init(
+      fileHash,
+      Math.max(pageIndex + 1, 1),
+      settings.slidingWindowSize,
+      settings.slidingWindowSize,
+    );
     this.thumbnailCache.init(fileHash);
     this.pageCache.markReady(pageIndex);
     this.thumbnailCache.markReady(pageIndex);
     await this.refreshManifest(fileHash);
+    if (generation !== this.openGeneration || this.openingFileHash !== fileHash) return;
 
     const previewUrl = this.buildPageUrl(pageIndex, this.pageSource());
     this.currentPageUrl.set(previewUrl);
@@ -1576,37 +2088,47 @@ export class ViewerComponent implements OnInit, OnDestroy {
     this.secondPageUrl.set(null);
     this.previewInitializedHash = fileHash;
     this.clearPreviewProbe();
-    this.fileState.update(s => s ? { ...s, totalPages: Math.max(s.totalPages, pageIndex + 1) } : s);
+    this.fileState.update((s) =>
+      s ? { ...s, totalPages: Math.max(s.totalPages, pageIndex + 1) } : s,
+    );
     this.bumpVerticalRenderVersion();
     this.reportRendererStats('preview-ready');
   }
 
   private schedulePreviewProbe(fileHash: string, attempt = 0): void {
     this.clearPreviewProbe();
-    if (!this.loading() || this.openingFileHash !== fileHash || this.previewInitializedHash === fileHash) {
-      return;
-    }
+    const generation = this.openGeneration;
+    const sessionId = this.openingSessionId;
+    const isCurrent = () =>
+      generation === this.openGeneration &&
+      sessionId === this.openingSessionId &&
+      this.loading() &&
+      this.openingFileHash === fileHash &&
+      this.previewInitializedHash !== fileHash;
+    if (!isCurrent()) return;
 
-    this.previewProbeTimer = setTimeout(async () => {
-      if (!this.loading() || this.openingFileHash !== fileHash || this.previewInitializedHash === fileHash) {
-        return;
-      }
+    this.previewProbeTimer = setTimeout(
+      async () => {
+        if (!isCurrent()) return;
 
-      try {
-        const manifest = await this.electron.getWorkerManifest(fileHash);
-        const page0 = manifest?.pages?.[0];
-        if (page0?.page) {
-          await this.initializePreview(fileHash, 0);
-          return;
+        try {
+          const manifest = await this.electron.getWorkerManifest(fileHash);
+          if (!isCurrent()) return;
+          const page0 = manifest?.pages?.[0];
+          if (page0?.page) {
+            await this.initializePreview(fileHash, 0);
+            return;
+          }
+        } catch {
+          // Ignore manifest races while the worker writes preview output.
         }
-      } catch {
-        // Ignore manifest races while the worker writes preview output.
-      }
 
-      if (attempt < 40) {
-        this.schedulePreviewProbe(fileHash, attempt + 1);
-      }
-    }, attempt === 0 ? 0 : 100);
+        if (isCurrent() && attempt < 40) {
+          this.schedulePreviewProbe(fileHash, attempt + 1);
+        }
+      },
+      attempt === 0 ? 0 : 100,
+    );
   }
 
   private clearPreviewProbe(): void {
@@ -1616,33 +2138,41 @@ export class ViewerComponent implements OnInit, OnDestroy {
     }
   }
 
-  private schedulePageReadyRetry(pageIndex: number, source: PageArtifactSource, attempt = 0, token?: number): void {
-    const retryToken = token ?? ++this.pageReadyRetryToken;
+  private schedulePageReadyRetry(
+    pageIndex: number,
+    source: PageArtifactSource,
+    attempt = 0,
+    token?: number,
+  ): void {
     if (token === undefined) {
       this.clearPageReadyRetry();
     }
+    const retryToken = token ?? this.pageReadyRetryToken;
 
-    this.pageReadyRetryTimer = setTimeout(() => {
-      if (retryToken !== this.pageReadyRetryToken) {
-        return;
-      }
-      if (this.currentPageIndex() !== pageIndex || this.pageSource() !== source) {
-        return;
-      }
-      if (this.pageCache.isReady(pageIndex)) {
-        this.currentPageUrl.set(this.buildPageUrl(pageIndex, source));
-        this.currentPageMeta = this.pageCache.getPageMeta(pageIndex, source);
+    this.pageReadyRetryTimer = setTimeout(
+      () => {
+        if (retryToken !== this.pageReadyRetryToken) {
+          return;
+        }
+        if (this.currentPageIndex() !== pageIndex || this.pageSource() !== source) {
+          return;
+        }
+        if (this.pageCache.isReady(pageIndex)) {
+          this.currentPageUrl.set(this.buildPageUrl(pageIndex, source));
+          this.currentPageMeta = this.pageCache.getPageMeta(pageIndex, source);
+          this.clearPageReadyRetry();
+          this.loadSecondPage(pageIndex);
+          return;
+        }
+        if (attempt < 15) {
+          this.schedulePageReadyRetry(pageIndex, source, attempt + 1, retryToken);
+          return;
+        }
+        this.currentPageUrl.set(null);
         this.clearPageReadyRetry();
-        this.loadSecondPage(pageIndex);
-        return;
-      }
-      if (attempt < 15) {
-        this.schedulePageReadyRetry(pageIndex, source, attempt + 1, retryToken);
-        return;
-      }
-      this.currentPageUrl.set(null);
-      this.clearPageReadyRetry();
-    }, attempt === 0 ? 40 : 60);
+      },
+      attempt === 0 ? 40 : 60,
+    );
   }
 
   private clearPageReadyRetry(): void {
@@ -1688,7 +2218,7 @@ export class ViewerComponent implements OnInit, OnDestroy {
     if (!state || !container) return;
 
     const containerRect = container.getBoundingClientRect();
-    const centerY = containerRect.top + (container.clientHeight * 0.35);
+    const centerY = containerRect.top + container.clientHeight * 0.35;
     const pages = Array.from(container.querySelectorAll('.vertical-page')) as HTMLElement[];
     let bestIndex = this.currentPageIndex();
     let bestDistance = Number.POSITIVE_INFINITY;
@@ -1708,7 +2238,9 @@ export class ViewerComponent implements OnInit, OnDestroy {
 
     this.currentPageIndex.set(bestIndex);
     this.currentPageMeta = this.pageCache.getPageMeta(bestIndex, this.pageSource());
-    this.currentPageUrl.set(this.pageCache.isReady(bestIndex) ? this.buildPageUrl(bestIndex, this.pageSource()) : null);
+    this.currentPageUrl.set(
+      this.pageCache.isReady(bestIndex) ? this.buildPageUrl(bestIndex, this.pageSource()) : null,
+    );
     this.secondPageUrl.set(null);
     this.pageCache.navigateTo(bestIndex, this.pageSource());
     this.saveProgress(state, bestIndex);
@@ -1747,8 +2279,12 @@ export class ViewerComponent implements OnInit, OnDestroy {
     const thumbnailReady = (this.thumbnailCache as any).readyThumbs?.size ?? 0;
     const thumbnailVersionCount = (this.thumbnailCache as any).thumbVersions?.size ?? 0;
     const thumbnailList = document.querySelector('.thumbnails-list') as HTMLElement | null;
-    const thumbnailItems = Array.from(document.querySelectorAll('.thumbnail-item')) as HTMLElement[];
-    const thumbnailImgs = Array.from(document.querySelectorAll('.thumbnail-item img')) as HTMLImageElement[];
+    const thumbnailItems = Array.from(
+      document.querySelectorAll('.thumbnail-item'),
+    ) as HTMLElement[];
+    const thumbnailImgs = Array.from(
+      document.querySelectorAll('.thumbnail-item img'),
+    ) as HTMLImageElement[];
     const thumbnailPlaceholders = document.querySelectorAll('.thumbnail-placeholder').length;
     const pageImages = Array.from(document.querySelectorAll('.viewer-image')) as HTMLImageElement[];
     const visiblePageImgs = pageImages.length;
@@ -1768,13 +2304,17 @@ export class ViewerComponent implements OnInit, OnDestroy {
     const thumbnailItemsInViewport = thumbnailList
       ? thumbnailItems.filter((item) => {
           const rect = item.getBoundingClientRect();
-          return rect.bottom > thumbnailViewportRect!.top && rect.top < thumbnailViewportRect!.bottom;
+          return (
+            rect.bottom > thumbnailViewportRect!.top && rect.top < thumbnailViewportRect!.bottom
+          );
         }).length
       : 0;
     const thumbnailImgsInViewport = thumbnailList
       ? thumbnailImgs.filter((img) => {
           const rect = img.getBoundingClientRect();
-          return rect.bottom > thumbnailViewportRect!.top && rect.top < thumbnailViewportRect!.bottom;
+          return (
+            rect.bottom > thumbnailViewportRect!.top && rect.top < thumbnailViewportRect!.bottom
+          );
         }).length
       : 0;
 

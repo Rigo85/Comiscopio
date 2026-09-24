@@ -1,7 +1,7 @@
 {
   "name": "comiscopio",
-  "version": "0.2.0",
-  "description": "Visor de comics y manga",
+  "version": "0.3.0",
+  "description": "Visor de cómics y manga con lectura LTR, RTL y vertical, miniaturas y progreso guardado.",
   "author": "Rigoberto L. Salgado Reyes <rlsalgado2006@gmail.com>",
   "license": "AGPL-3.0-or-later",
   "homepage": "https://github.com/Rigo85/Comiscopio",
@@ -12,7 +12,7 @@
   "main": "dist-electron/electron/main.js",
   "scripts": {
     "ng": "ng",
-    "start": "npm-run-all build:worker build:doc-worker build:ace-helper start:dev",
+    "start": "npm-run-all build:native start:dev",
     "start:dev": "run-p --race start:angular watch:electron start:electron",
     "start:angular": "ng serve --port 4200",
     "start:electron": "wait-on http://localhost:4200 dist-electron/electron/main.js && electron --no-sandbox .",
@@ -20,8 +20,8 @@
     "build:doc-worker": "cmake -B native/doc-worker/build -S native/doc-worker -DCMAKE_BUILD_TYPE=Release && cmake --build native/doc-worker/build -j\"$(nproc)\"",
     "build:ace-helper": "cmake -B native/ace-helper/build -S native/ace-helper -DCMAKE_BUILD_TYPE=Release && cmake --build native/ace-helper/build -j\"$(nproc)\"",
     "build:app": "npm-run-all build:angular build:electron",
-    "build:portable": "bash native/deps/build-linux-x64.sh",
-    "build:release": "npm-run-all build build:portable",
+    "build:portable": "node scripts/build-portable.cjs",
+    "build:release": "npm-run-all build:app build:portable",
     "clean:worker": "rm -rf native/worker/build",
     "clean:doc-worker": "rm -rf native/doc-worker/build",
     "clean:ace-helper": "rm -rf native/ace-helper/build",
@@ -29,59 +29,61 @@
     "clean": "rm -rf dist dist-electron release",
     "clean:all": "npm run clean && npm run clean:native",
     "build:native-linux": "bash native/deps/build-linux-x64.sh",
-    "full:package-linux": "npm run build:native-linux && npm run dist:linux",
-    "build": "npm-run-all build:worker build:doc-worker build:ace-helper build:app",
+    "full:package-linux": "npm run dist:linux",
+    "build": "npm-run-all build:native build:app",
     "build:angular": "ng build --configuration production --base-href ./",
     "build:electron": "tsc -p tsconfig.electron.json",
     "watch:electron": "tsc -p tsconfig.electron.json --watch",
     "test:unit": "vitest run",
     "test:native": "ctest --test-dir native/worker/build --output-on-failure",
     "test:workers": "bash test/workers/run-worker-tests.sh",
-    "test:all": "npm-run-all build test:unit test:native build:portable test:workers",
+    "test:all": "node scripts/test-all.cjs",
     "test": "npm run test:all",
     "test:watch": "vitest",
     "test:functional": "bash test/workers/run-distro-tests.sh",
-    "pack": "npm run build:release && NODE_NO_WARNINGS=1 electron-builder --dir",
-    "dist": "npm run build:release && NODE_NO_WARNINGS=1 electron-builder",
-    "dist:linux": "npm run build:release && NODE_NO_WARNINGS=1 electron-builder --linux",
-    "dist:win": "npm run build && NODE_NO_WARNINGS=1 electron-builder --win",
-    "postinstall": "electron-builder install-app-deps"
+    "pack": "npm run build:release && electron-builder --dir --publish never",
+    "dist": "npm run build:release && electron-builder --publish never",
+    "dist:linux": "npm run build:release && electron-builder --linux --publish never",
+    "dist:win": "npm run build && electron-builder --win --publish never",
+    "postinstall": "electron-builder install-app-deps",
+    "test:database": "npm run build:electron && node scripts/test-database.cjs",
+    "test:workers:portable": "node test/workers/native.test.cjs",
+    "build:native": "node scripts/build-native.cjs",
+    "prebuild:angular": "node scripts/generate-metadata.cjs",
+    "prebuild:electron": "node scripts/generate-metadata.cjs",
+    "test:packaged": "node test/integration/packaged-app.test.cjs",
+    "test:fixtures": "node scripts/prepare-ace-fixture.cjs",
+    "test:linux-artifacts": "node test/integration/linux-artifacts.test.cjs",
+    "test:windows-artifacts": "node test/integration/windows-artifacts.test.cjs",
+    "test:windows-processes": "node test/integration/windows-processes.test.cjs"
   },
   "private": true,
-  "packageManager": "npm@11.6.1",
+  "packageManager": "npm@11.16.0",
   "dependencies": {
-    "@angular/common": "^21.2.0",
-    "@angular/compiler": "^21.2.0",
-    "@angular/core": "^21.2.0",
-    "@angular/forms": "^21.2.0",
-    "@angular/platform-browser": "^21.2.0",
-    "@angular/router": "^21.2.0",
-    "7zip-bin": "^5.2.0",
-    "adm-zip": "^0.5.16",
-    "better-sqlite3": "^12.8.0",
-    "image-size": "^2.0.2",
-    "node-7z": "^3.0.0",
-    "node-unrar-js": "^2.0.2",
-    "pdfjs-dist": "^5.5.207",
-    "rxjs": "~7.8.0",
-    "tslib": "^2.3.0"
+    "@angular/common": "^22.1.7",
+    "@angular/compiler": "^22.1.7",
+    "@angular/core": "^22.1.7",
+    "@angular/forms": "^22.1.7",
+    "@angular/platform-browser": "^22.1.7",
+    "@angular/router": "^22.1.7",
+    "better-sqlite3": "^13.0.3",
+    "rxjs": "~7.8.2",
+    "tslib": "^2.8.1"
   },
   "devDependencies": {
-    "@angular/build": "^21.2.3",
-    "@angular/cli": "^21.2.3",
-    "@angular/compiler-cli": "^21.2.0",
-    "@electron/rebuild": "^4.0.3",
-    "@types/adm-zip": "^0.5.8",
-    "@types/better-sqlite3": "^7.6.13",
-    "@types/image-size": "^0.7.0",
-    "electron": "^41.0.3",
-    "electron-builder": "^26.8.1",
-    "jsdom": "^28.0.0",
-    "npm-run-all2": "^8.0.4",
-    "prettier": "^3.8.1",
-    "typescript": "~5.9.2",
-    "vitest": "^4.0.8",
-    "wait-on": "^9.0.4"
+    "@angular/build": "^22.1.8",
+    "@angular/cli": "^22.1.8",
+    "@angular/compiler-cli": "^22.1.7",
+    "@types/better-sqlite3": "^9.6.0",
+    "electron": "^44.4.4",
+    "electron-builder": "^26.15.3",
+    "jsdom": "^30.1.1",
+    "npm-run-all2": "^9.0.3",
+    "playwright-core": "^1.63.0",
+    "prettier": "^3.9.8",
+    "typescript": "~6.0.3",
+    "vitest": "^4.1.11",
+    "wait-on": "^9.1.0"
   },
   "build": {
     "appId": "com.comiscopio.app",
@@ -217,6 +219,12 @@
           "from": "resources/icon-1024.png",
           "to": "icon.png"
         }
+      ],
+      "extraFiles": [
+        {
+          "from": "scripts/uninstall.sh",
+          "to": "uninstall.sh"
+        }
       ]
     },
     "win": {
@@ -234,19 +242,21 @@
           ]
         }
       ],
-      "icon": "resources/icon.png"
+      "icon": "resources/icon.png",
+      "extraResources": [
+        {
+          "from": "native/vendor/win32-x64",
+          "to": "native"
+        }
+      ]
     },
-    "extraFiles": [
-      {
-        "from": "scripts/uninstall.sh",
-        "to": "uninstall.sh"
-      }
-    ],
     "asar": true,
     "asarUnpack": [
-      "node_modules/better-sqlite3/**",
-      "node_modules/7zip-bin/**",
-      "node_modules/node-unrar-js/**"
+      "node_modules/better-sqlite3/**"
     ]
+  },
+  "engines": {
+    "node": "^24.18.1",
+    "npm": ">=11 <12"
   }
 }

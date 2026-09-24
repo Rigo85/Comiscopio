@@ -16,6 +16,19 @@ Comiscopio-specific adjustments:
 - add a small downstream patch in `source/apps/exe/acefuncs/acefuncs.c`
   to emit machine-readable listing lines when
   `COMISCOPIO_UNACE_LIST_PREFIX` is set
+- listing records contain `<prefix><unpacked bytes>\t<directory 0/1>\t<hex filename>`;
+  an explicit newline separates them from legacy terminal output. Hex encoding
+  prevents control characters in names from forging records. All file headers,
+  including directories and non-images, participate in entry/declared-byte limits.
+- preserve `source/comiscopio_limits.h` and the checks in `acefuncs.c` and
+  `source/base/all/state/state.c`: the helper passes internal
+  `COMISCOPIO_UNACE_MAX_ENTRIES`, `COMISCOPIO_UNACE_MAX_ENTRY_BYTES`,
+  `COMISCOPIO_UNACE_MAX_TOTAL_BYTES` for listing, and
+  `COMISCOPIO_UNACE_MAX_OUTPUT_BYTES` for each extraction process. The latter
+  checks remaining budget **before** each filesystem write, counting all files
+  that process writes. Failures emit `COMISCOPIO_LIMIT:<reason>` and exit 10.
+  The helper translates the error and removes partial output. Rebuild helper
+  and decoder together; their listing protocol is version-coupled.
 - harden `source/base/all/lfn/lin.c`
   to avoid `sprintf` overflow and null `PATH` dereference in
   `BASE_LFN_CompleteArg0`

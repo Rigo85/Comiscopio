@@ -16,6 +16,11 @@ typedef unsigned int UINT;
 #define CALLBACK
 #define PASCAL
 
+#else
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #endif
 
 #include <dll.hpp>

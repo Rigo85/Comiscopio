@@ -36,6 +36,7 @@ export interface AppSettings {
   theme: 'dark' | 'light';
   slidingWindowSize: number; // pages to keep in memory before/after current
   prefetchCount: number; // pages to prefetch ahead
+  keybindings: string; // JSON overrides for keyboard shortcuts
 }
 
 /** Default application settings */
@@ -46,6 +47,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'dark',
   slidingWindowSize: 5,
   prefetchCount: 3,
+  keybindings: '{}',
 };
 
 /** Page info sent from main to renderer */

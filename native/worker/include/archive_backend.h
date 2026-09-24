@@ -31,6 +31,8 @@ public:
 
     /// Best-effort preview extraction for the sorted page index requested by the UI.
     /// Implementations may perform a lightweight prepass and emit a single raw file.
+    /// The 7z backend retains its decoded block until open() or close(); callers
+    /// reusing that instance avoid decompressing the preview's solid block again.
     virtual bool extractPreview(const std::string& archivePath, const std::string& rawDir,
                                 int sortedIndex, std::string& outEntryName,
                                 std::string& outRawRelativePath) = 0;

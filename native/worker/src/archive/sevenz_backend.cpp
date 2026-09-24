@@ -5,6 +5,7 @@
 #include <memory>
 #include <csignal>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -159,6 +160,14 @@ public:
         size_t offset = 0;
         size_t outSizeProcessed = 0;
 
+        const UInt32 folder = db.FileToFolder[index];
+        if (folder != 0xFFFFFFFF && (!outBuffer || blockIndex != folder)) {
+            // Count actual SDK cache misses, not file extraction requests.
+            std::fprintf(stderr, "level=info source=7z event=block_decode block=%u unpackedBytes=%llu\n",
+                static_cast<unsigned>(folder),
+                static_cast<unsigned long long>(SzAr_GetFolderUnpackSize(&db.db, folder)));
+        }
+
         const SRes result = SzArEx_Extract(
             &db,
             &lookStream.vt,
@@ -240,8 +249,13 @@ public:
         entries.clear();
         std::filesystem::create_directories(rawDir);
 
-        SevenZipReader reader(archivePath);
-        auto indexedEntries = collectSevenZipImageEntries(reader);
+        // Move ownership into this call so the solid buffer is freed on success,
+        // cancellation or exception, before foreground/background image work.
+        auto reader = previewArchivePath == archivePath ? std::move(previewReader) : nullptr;
+        previewReader.reset();
+        previewArchivePath.clear();
+        if (!reader) reader = std::make_unique<SevenZipReader>(archivePath);
+        auto indexedEntries = collectSevenZipImageEntries(*reader);
         entries.reserve(indexedEntries.size());
 
         for (size_t i = 0; i < indexedEntries.size(); i++) {
@@ -257,7 +271,7 @@ public:
             std::snprintf(tmpName, sizeof(tmpName), "raw_%06d%s", static_cast<int>(i), ext.c_str());
             std::string rawPath = rawDir + "/" + tmpName;
 
-            if (reader.extractToFile(indexed.archiveIndex, rawPath)) {
+            if (reader->extractToFile(indexed.archiveIndex, rawPath)) {
                 indexed.entry.rawPath = rawPath;
             } else {
                 indexed.entry.rawPath.clear();
@@ -278,10 +292,12 @@ public:
                         int sortedIndex, std::string& outEntryName,
                         std::string& outRawRelativePath) override {
         if (sortedIndex < 0) return false;
+        previewReader.reset();
+        previewArchivePath.clear();
         std::filesystem::create_directories(rawDir);
 
-        SevenZipReader reader(archivePath);
-        auto indexedEntries = collectSevenZipImageEntries(reader);
+        auto reader = std::make_unique<SevenZipReader>(archivePath);
+        auto indexedEntries = collectSevenZipImageEntries(*reader);
         if (sortedIndex >= static_cast<int>(indexedEntries.size())) {
             return false;
         }
@@ -294,7 +310,7 @@ public:
         std::snprintf(finalName, sizeof(finalName), "%06d%s", sortedIndex, ext.c_str());
         const std::string finalPath = rawDir + "/" + finalName;
 
-        if (!std::filesystem::exists(finalPath) && !reader.extractToFile(target.archiveIndex, finalPath)) {
+        if (!reader->extractToFile(target.archiveIndex, finalPath)) {
             std::error_code ec;
             std::filesystem::remove(finalPath, ec);
             return false;
@@ -302,6 +318,8 @@ public:
 
         outEntryName = target.entry.archivePath;
         outRawRelativePath = std::string("raw/") + finalName;
+        previewArchivePath = archivePath;
+        previewReader = std::move(reader);
         return true;
     }
 
@@ -330,10 +348,14 @@ public:
 
     void close() override {
         entries.clear();
+        previewReader.reset();
+        previewArchivePath.clear();
     }
 
 private:
     std::string rawDir;
+    std::string previewArchivePath;
+    std::unique_ptr<SevenZipReader> previewReader;
     std::vector<CanonicalArchiveEntry> entries;
 };
 

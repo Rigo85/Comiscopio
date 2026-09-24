@@ -9,14 +9,15 @@ import { WindowManager } from './window-manager';
 import { NativeWorkerBridge } from './native-worker-bridge';
 import { Database } from './db/database';
 import { IpcChannels } from '../shared/ipc-channels';
-import { FILE_FILTERS, THUMBNAIL_PROTOCOL_SCHEME, PAGE_PROTOCOL_SCHEME, ARCHIVE_EXTENSIONS } from '../shared/constants';
+import { FILE_FILTERS, THUMBNAIL_PROTOCOL_SCHEME, PAGE_PROTOCOL_SCHEME, ARCHIVE_EXTENSIONS, getConfigDir } from '../shared/constants';
 
 let windowManager: WindowManager;
 let workerBridge: NativeWorkerBridge;
 let database: Database;
+const windowSessions = new Map<BrowserWindow, { fileHash: string; filePath: string; sessionId: string }>();
 
 const isDev = !app.isPackaged;
-const LOG_DIR = path.join(os.homedir(), '.comiscopio', 'logs');
+const LOG_DIR = path.join(getConfigDir(), 'logs');
 const LOG_FILE_NAME = 'performance.log';
 const LOG_FILE_PATH = path.join(LOG_DIR, LOG_FILE_NAME);
 const LOG_MAX_BYTES = 10 * 1024 * 1024;
@@ -242,6 +243,13 @@ async function initialize(): Promise<void> {
       try { return JSON.parse(raw); } catch { return null; }
     },
   );
+  app.on('browser-window-created', (_event, win) => {
+    win.once('closed', () => {
+      const owned = windowSessions.get(win);
+      if (owned) workerBridge.closeSession(owned.fileHash);
+      windowSessions.delete(win);
+    });
+  });
 }
 
 function registerProtocolHandlers(): void {
@@ -351,6 +359,7 @@ function setupIpcHandlers(): void {
     // Compute file hash for session key
     let stat: ReturnType<typeof fs.statSync>;
     try {
+      filePath = fs.realpathSync(filePath);
       stat = fs.statSync(filePath);
     } catch (e: any) {
       if (e.code === 'ENOENT') {
@@ -365,6 +374,20 @@ function setupIpcHandlers(): void {
     const fileHash = crypto.createHash('sha256').update(data).digest('hex').substring(0, 16);
     const fileName = path.basename(filePath);
 
+    // Reserve ownership before scheduling the worker, including during extraction.
+    for (const [owner, owned] of windowSessions) {
+      if (owned.filePath !== filePath || owner.isDestroyed()) continue;
+      if (owner.isMinimized()) owner.restore();
+      owner.show();
+      owner.focus();
+      return { ...owned, fileName, totalPages: workerBridge.getSession(owned.fileHash)?.totalPages ?? 0,
+        alreadyOpen: true, redirected: owner !== win };
+    }
+    const previous = windowSessions.get(win);
+    if (previous) workerBridge.closeSession(previous.fileHash);
+    windowSessions.set(win, { fileHash, filePath, sessionId });
+    windowManager.setFileHashForWindow(win, fileHash);
+
     logDiagnostic('info', 'session', 'session_start', {
       sessionId,
       fileHash,
@@ -375,38 +398,41 @@ function setupIpcHandlers(): void {
       alreadyOpen: !!workerBridge.getSession(fileHash)?.ready,
     });
 
-    // Check if already opened
-    const existing = workerBridge.getSession(fileHash);
-    if (existing && existing.ready) {
-      return { fileHash, sessionId, fileName, filePath, totalPages: existing.totalPages, alreadyOpen: true };
-    }
-
     // Start native worker on the next tick so the renderer has time to
     // store fileHash/opening state before early preview events arrive.
     setImmediate(() => {
-      workerBridge.startSession(fileHash, filePath, (evt) => {
-        if (win.isDestroyed()) return;
+      if (win.isDestroyed() || windowSessions.get(win)?.sessionId !== sessionId) return;
+      try { workerBridge.startSession(fileHash, filePath, (evt) => {
+        if (win.isDestroyed() || windowSessions.get(win)?.sessionId !== sessionId) return;
         if (evt.type === 'archive') {
           logElectronMemory('archive', { fileHash, sessionId }, win);
         } else if (evt.type === 'done') {
           logElectronMemory('done', { fileHash, sessionId }, win);
         }
         win.webContents.send(IpcChannels.WORKER_EVENT, { fileHash, sessionId, ...evt });
-      });
+      }); } catch (err) {
+        win.webContents.send(IpcChannels.WORKER_EVENT, { fileHash, sessionId, type: 'error', message: String(err) });
+      }
     });
 
     return { fileHash, sessionId, fileName, filePath, totalPages: 0, alreadyOpen: false };
   });
 
-  ipcMain.on(IpcChannels.WORKER_FOCUS, (_event, fileHash: string, page: number) => {
+  ipcMain.on(IpcChannels.WORKER_FOCUS, (event, fileHash: string, page: number) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win || windowSessions.get(win)?.fileHash !== fileHash) return;
     workerBridge.focus(fileHash, page);
   });
 
   ipcMain.on(
     IpcChannels.WORKER_CLOSE,
-    (_event, fileHash: string, meta?: { sessionId?: string; reason?: string }) => {
+    (event, fileHash: string, meta?: { sessionId?: string; reason?: string }) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const owned = win && windowSessions.get(win);
+    if (!win || !owned || owned.fileHash !== fileHash || owned.sessionId !== meta?.sessionId) return;
+    windowSessions.delete(win);
+    windowManager.setFileHashForWindow(win, null);
     workerBridge.closeSession(fileHash);
-    const win = BrowserWindow.getAllWindows()[0];
     if (win && !win.isDestroyed()) {
       logElectronMemory(
         'worker_close',
@@ -644,14 +670,34 @@ app.whenReady().then(async () => {
       });
     }
   });
+}).catch((err: unknown) => {
+  console.error('Application initialization failed:', err);
+  dialog.showErrorBox('No se pudo iniciar Comiscopio',
+    'No se pudo abrir la configuración. Los datos existentes se han conservado.\n\n' + String(err));
+  app.quit();
 });
 
 app.on('window-all-closed', () => {
-  workerBridge.closeAll();
   if (process.platform !== 'darwin') app.quit();
+  else void workerBridge?.closeAll();
 });
 
-app.on('before-quit', () => {
-  workerBridge.closeAll();
-  database.close();
+let shutdownStarted = false;
+let shutdownComplete = false;
+app.on('before-quit', (event) => {
+  if (shutdownComplete) return;
+  event.preventDefault();
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+  void (async () => {
+    try {
+      await workerBridge?.closeAll();
+      database?.close();
+    } catch (error) {
+      console.error('Application shutdown failed:', error);
+    } finally {
+      shutdownComplete = true;
+      app.quit();
+    }
+  })();
 });

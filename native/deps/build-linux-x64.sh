@@ -14,6 +14,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 IMAGE="comiscopio-linux-builder"
+source "$SCRIPT_DIR/versions.env"
 
 echo "==================================================================="
 echo " Comiscopio — Linux x64 native worker build"
@@ -25,6 +26,7 @@ echo ""
 echo "--- Building Docker image ---"
 docker build \
     --file "$SCRIPT_DIR/Dockerfile.linux-x64" \
+    --build-arg "UBUNTU_IMAGE=$UBUNTU_IMAGE" \
     --tag  "$IMAGE" \
     "$SCRIPT_DIR"
 

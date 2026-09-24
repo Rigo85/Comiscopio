@@ -143,7 +143,8 @@ echo "└───────────────────────�
 if [[ "$ONLY_DOC" == false ]]; then
     if [[ ! -x "$ARCHIVE_WORKER" ]]; then
         echo ""
-        echo "WARNING: archive worker not found at $ARCHIVE_WORKER — skipping archive tests"
+        echo "ERROR: archive worker not found at $ARCHIVE_WORKER" >&2
+        OVERALL_PASS=false
     else
         echo ""
         bash "$SCRIPT_DIR/test-archive-worker.sh" \
@@ -157,7 +158,8 @@ fi
 if [[ "$ONLY_ARCHIVE" == false ]]; then
     if [[ ! -x "$DOC_WORKER" ]]; then
         echo ""
-        echo "WARNING: doc worker not found at $DOC_WORKER — skipping doc tests"
+        echo "ERROR: doc worker not found at $DOC_WORKER" >&2
+        OVERALL_PASS=false
     else
         echo ""
         bash "$SCRIPT_DIR/test-doc-worker.sh" \

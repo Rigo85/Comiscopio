@@ -6,7 +6,7 @@
  * the private method via TypeScript casting.  Each test checks the resulting
  * signal values rather than implementation details.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { signal } from '@angular/core';
 
 // ─── Minimal service stubs ─────────────────────────────────────────────────
@@ -70,6 +70,7 @@ function makeKeybindingsStub() {
 // just attach metadata.  The template is NOT compiled at import time — JIT
 // compilation is deferred until the component is actually used in a view.
 import { ViewerComponent } from '../../src/app/components/viewer/viewer.component';
+import { PageCacheService } from '../../src/app/services/page-cache.service';
 
 // ─── Factory ───────────────────────────────────────────────────────────────
 
@@ -197,15 +198,14 @@ describe('handleWorkerEvent: error', () => {
     expect((viewer as any).openingSessionId).toBeNull();
   });
 
-  it('does not set error when not in loading state', () => {
+  it('reports a fatal worker failure even after loading', () => {
     const { viewer } = makeViewer();
     (viewer as any).openingFileHash = 'h';
     viewer.loading.set(false);
 
     dispatch(viewer, { type: 'error', fileHash: 'h', message: 'late error' });
 
-    // When not loading, error event is a no-op
-    expect(viewer.error()).toBeNull();
+    expect(viewer.error()).toBe('late error');
   });
 });
 
@@ -285,4 +285,188 @@ describe('handleWorkerEvent: done', () => {
     expect(viewer.loading()).toBe(false);
     expect(viewer.error()).toBeNull();
   });
+});
+
+
+afterEach(() => { vi.useRealTimers(); });
+
+function active(viewer: ViewerComponent, hash: string, sessionId = hash) {
+  viewer.fileState.set({ fileHash: hash, sessionId, filePath: '/' + hash, fileName: hash, totalPages: 5 });
+}
+
+it('ignores events from a replaced session of the same file', () => {
+  const { viewer, pageCache } = makeViewer();
+  active(viewer, 'same', 'new');
+  dispatch(viewer, { type: 'ready', fileHash: 'same', sessionId: 'old', page: 0 });
+  expect(pageCache.markReady).not.toHaveBeenCalled();
+});
+
+it('keeps reading after a single damaged page during opening', () => {
+  const { viewer } = makeViewer();
+  active(viewer, 'h');
+  viewer.loading.set(true);
+  dispatch(viewer, { type: 'error', fileHash: 'h', page: 2, message: 'Invalid image' });
+  expect(viewer.error()).toBeNull();
+  expect(viewer.fileState()?.fileHash).toBe('h');
+  expect((viewer as any).resetViewerState).not.toHaveBeenCalled();
+});
+
+it('a delayed settings response cannot initialize the next file cache', async () => {
+  const { viewer, electron, pageCache } = makeViewer();
+  let resolve!: (value: any) => void;
+  electron.getSettings.mockReturnValue(new Promise(r => { resolve = r; }));
+  active(viewer, 'old');
+  const complete = (ViewerComponent.prototype as any).completeOpen.call(viewer, 'old', 100);
+  active(viewer, 'new');
+  resolve({ slidingWindowSize: 5 });
+  await complete;
+  expect(pageCache.init).not.toHaveBeenCalled();
+  expect(viewer.fileState()?.totalPages).toBe(5);
+});
+
+it('a delayed progress response cannot navigate the next file', async () => {
+  const { viewer, electron, thumbnailCache } = makeViewer();
+  let resolve!: (value: any) => void;
+  (electron as any).getProgress = vi.fn(() => new Promise(r => { resolve = r; }));
+  (thumbnailCache as any).syncReadyFromManifest = vi.fn();
+  viewer.goToPage = vi.fn();
+  active(viewer, 'old');
+  const complete = (ViewerComponent.prototype as any).completeOpen.call(viewer, 'old', 100);
+  await Promise.resolve();
+  await Promise.resolve();
+  active(viewer, 'new');
+  resolve({ currentPage: 88 });
+  await complete;
+  expect(viewer.goToPage).not.toHaveBeenCalled();
+});
+
+it('a delayed manifest does not populate a different file', async () => {
+  const { viewer, electron, pageCache } = makeViewer();
+  let resolve!: (value: any) => void;
+  (electron as any).getWorkerManifest = vi.fn(() => new Promise(r => { resolve = r; }));
+  active(viewer, 'old');
+  const read = (ViewerComponent.prototype as any).refreshManifest.call(viewer, 'old');
+  active(viewer, 'new');
+  resolve({ pages: [{ page: 'old.jpg' }] });
+  await read;
+  expect(pageCache.updateManifest).not.toHaveBeenCalled();
+});
+
+it('retries the current page when it becomes ready without another event', () => {
+  vi.useFakeTimers();
+  const { viewer, pageCache } = makeViewer();
+  (viewer as any).clearPageReadyRetry = (ViewerComponent.prototype as any).clearPageReadyRetry.bind(viewer);
+  active(viewer, 'h');
+  (viewer as any).schedulePageReadyRetry(0, 'optimized');
+  vi.advanceTimersByTime(40);
+  pageCache.isReady.mockReturnValue(true);
+  vi.advanceTimersByTime(60);
+  expect(viewer.currentPageUrl()).toBe('comiscopio-page://hash/0');
+});
+
+it('a duplicate opening in another window keeps the current reader', async () => {
+  const { viewer, electron } = makeViewer();
+  active(viewer, 'current');
+  (electron as any).workerStart = vi.fn().mockResolvedValue({ redirected: true, alreadyOpen: true });
+  await viewer.openFile('/already-open');
+  expect(viewer.fileState()?.fileHash).toBe('current');
+  expect((viewer as any).closeCurrentFile).not.toHaveBeenCalled();
+  expect(viewer.loading()).toBe(false);
+});
+
+it('redirecting a duplicate does not invalidate an opening already in progress', async () => {
+  const { viewer, electron, pageCache } = makeViewer();
+  active(viewer, 'current');
+  viewer.loading.set(true);
+  const generation = (viewer as any).openGeneration;
+  (electron as any).workerStart = vi.fn().mockResolvedValue({ redirected: true, alreadyOpen: true });
+  await viewer.openFile('/already-open');
+  expect((viewer as any).openGeneration).toBe(generation);
+  expect(viewer.loading()).toBe(true);
+  expect(viewer.fileState()?.fileHash).toBe('current');
+  expect(pageCache.init).not.toHaveBeenCalled();
+});
+
+it('shows the first page when ready arrives after the preview probe expires', async () => {
+  vi.useFakeTimers();
+  const { viewer, electron } = makeViewer();
+  const pageCache = new PageCacheService(electron as any);
+  (viewer as any).pageCache = pageCache;
+  (viewer as any).buildPageUrl = (ViewerComponent.prototype as any).buildPageUrl.bind(viewer);
+  active(viewer, 'slow', 'session');
+  viewer.fileState.update(s => s ? { ...s, totalPages: 0 } : s);
+  viewer.loading.set(true);
+  (viewer as any).openingFileHash = 'slow';
+  (viewer as any).openingSessionId = 'session';
+  (viewer as any).initializePreview = (ViewerComponent.prototype as any).initializePreview.bind(viewer);
+  (electron as any).getWorkerManifest = vi.fn().mockResolvedValue({ pages: [] });
+  (viewer as any).schedulePreviewProbe('slow');
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(viewer.currentPageUrl()).toBeNull();
+  dispatch(viewer, { type: 'ready', fileHash: 'slow', sessionId: 'session', page: 0 });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(pageCache.isReady(0)).toBe(true);
+  expect(viewer.currentPageUrl()).toMatch(/^comiscopio-page:\/\/slow\/0\?/);
+  expect(viewer.fileState()?.totalPages).toBe(1);
+  expect(viewer.loading()).toBe(true); // Extraction is still in progress.
+});
+
+it('does not use a delayed preview probe from a previous opening of the same file', async () => {
+  vi.useFakeTimers();
+  const { viewer, electron } = makeViewer();
+  let resolve!: (value: any) => void;
+  (electron as any).getWorkerManifest = vi.fn(() => new Promise(r => { resolve = r; }));
+  active(viewer, 'same', 'old');
+  viewer.loading.set(true);
+  (viewer as any).openingFileHash = 'same';
+  (viewer as any).openingSessionId = 'old';
+  (viewer as any).schedulePreviewProbe('same');
+  await vi.advanceTimersByTimeAsync(0);
+  (viewer as any).openGeneration++;
+  active(viewer, 'same', 'new');
+  (viewer as any).openingSessionId = 'new';
+  resolve({ pages: [{ page: 'old-session.jpg' }] });
+  await vi.advanceTimersByTimeAsync(0);
+  expect((viewer as any).initializePreview).not.toHaveBeenCalled();
+});
+
+for (const secondPath of ['/same.cbz', '/alias/same.cbz']) {
+  it(`serializes pending openings before reusing a session: ${secondPath}`, async () => {
+    const { viewer, electron } = makeViewer();
+    let resolveFirst!: (value: any) => void;
+    (viewer as any).schedulePreviewProbe = vi.fn();
+    (electron as any).workerClose = vi.fn();
+    const result = { fileHash: 'same', sessionId: 'first', filePath: '/same.cbz', fileName: 'same.cbz', totalPages: 0, alreadyOpen: false };
+    (electron as any).workerStart = vi.fn()
+      .mockImplementationOnce(() => new Promise(resolve => { resolveFirst = resolve; }))
+      .mockImplementationOnce(async () => {
+        expect((electron as any).workerClose).toHaveBeenCalledWith('same', { sessionId: 'first', reason: 'superseded-open' });
+        return { ...result, sessionId: 'second' };
+      });
+    const first = viewer.openFile('/same.cbz');
+    await Promise.resolve();
+    const second = viewer.openFile(secondPath);
+    await Promise.resolve();
+    expect((electron as any).workerStart).toHaveBeenCalledTimes(1);
+    resolveFirst(result);
+    await Promise.all([first, second]);
+    expect(viewer.fileState()?.sessionId).toBe('second');
+    expect((electron as any).workerClose).toHaveBeenCalledTimes(1);
+  });
+}
+
+it('does not start an opening cancelled while another response was pending', async () => {
+  const { viewer, electron } = makeViewer();
+  let resolveFirst!: (value: any) => void;
+  (electron as any).workerClose = vi.fn();
+  (electron as any).workerStart = vi.fn(() => new Promise(resolve => { resolveFirst = resolve; }));
+  const first = viewer.openFile('/first.cbz');
+  await Promise.resolve();
+  const second = viewer.openFile('/second.cbz');
+  viewer.cancelOpen();
+  resolveFirst({ fileHash: 'first', sessionId: 'first-session', alreadyOpen: false });
+  await Promise.all([first, second]);
+  expect((electron as any).workerStart).toHaveBeenCalledTimes(1);
+  expect((electron as any).workerClose).toHaveBeenCalledWith('first', { sessionId: 'first-session', reason: 'superseded-open' });
+  expect(viewer.fileState()).toBeNull();
 });

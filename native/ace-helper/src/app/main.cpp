@@ -1,8 +1,11 @@
 #include "helper_archive_utils.h"
+#include "ace_limits.h"
 
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cerrno>
+#include <clocale>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -16,8 +19,12 @@
 #include <vector>
 
 #include <limits.h>
+#include <poll.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#ifdef __CYGWIN__
+#include <sys/cygwin.h>
+#endif
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
@@ -40,10 +47,29 @@ struct ProcessResult {
 struct ListedEntry {
     std::string originalPath;
     std::string archivePath;
+    uint64_t bytes = 0;
 };
 
 void signalHandler(int) {
     cancelled = 1;
+}
+
+std::string decoderPath(const std::string& path) {
+#ifdef __CYGWIN__
+    // Native Windows callers pass drive/UNC paths. The portable MSYS runtime
+    // has its own mount prefix; do not assume an installed MSYS2 /c mount.
+    if (path.find('\\') != std::string::npos ||
+        (path.size() > 1 && path[1] == ':') || path.rfind("//", 0) == 0) {
+        const auto size = cygwin_conv_path(CCP_WIN_A_TO_POSIX, path.c_str(), nullptr, 0);
+        if (size <= 0) throw std::runtime_error("No se pudo convertir la ruta ACE");
+        std::string converted(static_cast<size_t>(size), '\0');
+        if (cygwin_conv_path(CCP_WIN_A_TO_POSIX, path.c_str(), converted.data(), converted.size()) != 0)
+            throw std::runtime_error("No se pudo convertir la ruta ACE");
+        converted.pop_back();
+        return converted;
+    }
+#endif
+    return path;
 }
 
 std::string trimLine(std::string line) {
@@ -109,7 +135,8 @@ fs::path findBundledUnaceBinary() {
 ProcessResult runProcessCapture(
     const fs::path& executable,
     const std::vector<std::string>& args,
-    const std::vector<std::pair<std::string, std::string>>& extraEnv = {}) {
+    const std::vector<std::pair<std::string, std::string>>& extraEnv = {},
+    size_t maxOutputBytes = 64 * 1024) {
     int pipefd[2];
     if (pipe(pipefd) != 0) {
         throw std::runtime_error("No se pudo crear pipe para proceso hijo");
@@ -147,15 +174,41 @@ ProcessResult runProcessCapture(
     close(pipefd[1]);
 
     ProcessResult result;
-    char buffer[4096];
-    ssize_t bytesRead;
-    while ((bytesRead = read(pipefd[0], buffer, sizeof(buffer))) > 0) {
-        result.output.append(buffer, static_cast<std::size_t>(bytesRead));
-    }
-    close(pipefd[0]);
-
     int status = 0;
-    waitpid(pid, &status, 0);
+    bool reaped = false;
+    try {
+        while (pipefd[0] >= 0 || !reaped) {
+            if (cancelled) throw std::runtime_error("Extraccion ACE cancelada");
+            struct pollfd descriptor{pipefd[0], POLLIN | POLLHUP, 0};
+            const int ready = poll(&descriptor, 1, 100);
+            if (ready < 0 && errno != EINTR) throw std::runtime_error("No se pudo leer la salida del decoder ACE");
+            if (ready > 0 && descriptor.revents) {
+                char buffer[4096];
+                const ssize_t bytesRead = read(pipefd[0], buffer, sizeof(buffer));
+                if (bytesRead > 0) {
+                    if (static_cast<size_t>(bytesRead) > maxOutputBytes - result.output.size()) {
+                        throw std::runtime_error("ACE supera el limite de salida de diagnostico del decoder");
+                    }
+                    result.output.append(buffer, static_cast<size_t>(bytesRead));
+                } else if (bytesRead == 0) {
+                    close(pipefd[0]);
+                    pipefd[0] = -1;
+                } else if (errno != EINTR) throw std::runtime_error("No se pudo leer la salida del decoder ACE");
+            }
+            if (!reaped) {
+                const auto waited = waitpid(pid, &status, WNOHANG);
+                if (waited == pid) reaped = true;
+                else if (waited < 0 && errno != EINTR) throw std::runtime_error("No se pudo esperar al decoder ACE");
+            }
+        }
+    } catch (...) {
+        if (pipefd[0] >= 0) close(pipefd[0]);
+        if (!reaped) {
+            kill(pid, SIGKILL);
+            while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+        }
+        throw;
+    }
     if (WIFEXITED(status)) {
         result.exitCode = WEXITSTATUS(status);
     } else if (WIFSIGNALED(status)) {
@@ -165,31 +218,78 @@ ProcessResult runProcessCapture(
     return result;
 }
 
-std::vector<ListedEntry> listArchiveEntries(const fs::path& unaceBinary, const std::string& archivePath) {
+void checkDecoderLimit(const ProcessResult& result, const AceLimits& limits) {
+    if (result.output.find("COMISCOPIO_LIMIT:") == std::string::npos) return;
+    if (result.output.find("COMISCOPIO_LIMIT:entries") != std::string::npos)
+        throw std::runtime_error("ACE supera el limite de entradas (" + std::to_string(limits.entries) + ")");
+    if (result.output.find("COMISCOPIO_LIMIT:entry_bytes") != std::string::npos)
+        throw std::runtime_error("ACE supera el limite por archivo (" + std::to_string(limits.entryBytes) + " bytes)");
+    if (result.output.find("COMISCOPIO_LIMIT:total_bytes") != std::string::npos)
+        throw std::runtime_error("ACE supera el limite total (" + std::to_string(limits.totalBytes) + " bytes)");
+    throw std::runtime_error("ACE supera el presupuesto de escritura o contiene limites no validos");
+}
+
+std::string decodeListedName(const std::string& hex) {
+    if (hex.empty() || hex.size() >= 640 || hex.size() % 2) throw std::runtime_error("Listado ACE no valido");
+    auto digit = [](char c) -> unsigned {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        throw std::runtime_error("Listado ACE no valido");
+    };
+    std::string result;
+    for (size_t i = 0; i < hex.size(); i += 2) result += static_cast<char>((digit(hex[i]) << 4) | digit(hex[i + 1]));
+    return result;
+}
+
+std::vector<ListedEntry> listArchiveEntries(const fs::path& unaceBinary, const std::string& archivePath, const AceLimits& limits) {
     static const std::string kPrefix = "COMISCOPIO_FILE\t";
 
     ProcessResult result = runProcessCapture(
         unaceBinary,
         {"v", "-y", "-c-", archivePath},
-        {{"COMISCOPIO_UNACE_LIST_PREFIX", kPrefix}});
+        {{"COMISCOPIO_UNACE_LIST_PREFIX", kPrefix},
+         {"COMISCOPIO_UNACE_MAX_ENTRIES", std::to_string(limits.entries)},
+         {"COMISCOPIO_UNACE_MAX_ENTRY_BYTES", std::to_string(limits.entryBytes)},
+         {"COMISCOPIO_UNACE_MAX_TOTAL_BYTES", std::to_string(limits.totalBytes)}}, 8 * 1024 * 1024);
 
+    checkDecoderLimit(result, limits);
     if (result.exitCode != 0) {
         throw std::runtime_error("unace no pudo listar el archivo ACE");
     }
 
     std::vector<ListedEntry> entries;
-    std::size_t pos = 0;
-    while ((pos = result.output.find(kPrefix, pos)) != std::string::npos) {
-        const std::size_t start = pos + kPrefix.size();
-        std::size_t end = result.output.find_first_of("\r\n", start);
-        if (end == std::string::npos) end = result.output.size();
-
-        const std::string originalPath = trimLine(result.output.substr(start, end - start));
-        pos = end;
+    uint64_t count = 0, total = 0;
+    std::istringstream listing(result.output);
+    std::string line;
+    while (std::getline(listing, line)) {
+        line = trimLine(line);
+        if (line.rfind(kPrefix, 0) != 0) continue;
+        const auto first = line.find('\t', kPrefix.size());
+        const auto second = first == std::string::npos ? first : line.find('\t', first + 1);
+        if (first == std::string::npos || second == std::string::npos) throw std::runtime_error("Listado ACE no valido");
+        const auto bytes = aceUnsigned(line.substr(kPrefix.size(), first - kPrefix.size()));
+        const auto directory = line.substr(first + 1, second - first - 1);
+        if (directory != "0" && directory != "1") throw std::runtime_error("Listado ACE no valido");
+        const std::string originalPath = decodeListedName(line.substr(second + 1));
+        limits.add(bytes, count, total); // Count sidecars, junk and directories too.
+        if (directory == "1") continue;
         const std::string archivePathNormalized = normalizeArchivePath(originalPath);
         if (!isImageArchiveEntry(archivePathNormalized)) continue;
+        // UnACE uses 320-byte path buffers. Reject unsafe names before invoking
+        // extraction, including Windows drive paths and wildcard selectors.
+        if (originalPath.size() >= 320 || archivePathNormalized.empty() ||
+            originalPath.front() == '/' || originalPath.front() == '\\' || archivePathNormalized.front() == '-' ||
+            originalPath.find_first_of(":*?") != std::string::npos || originalPath.find('\0') != std::string::npos) {
+            throw std::runtime_error("ACE contiene una ruta no admitida");
+        }
+        std::istringstream components(archivePathNormalized);
+        std::string component;
+        while (std::getline(components, component, '/')) {
+            if (component == "." || component == "..") throw std::runtime_error("ACE contiene una ruta no admitida");
+        }
 
-        entries.push_back({originalPath, archivePathNormalized});
+        entries.push_back({originalPath, archivePathNormalized, bytes});
     }
 
     std::sort(entries.begin(), entries.end(), [](const ListedEntry& lhs, const ListedEntry& rhs) {
@@ -216,7 +316,9 @@ bool extractSingleEntry(
     const std::string& archivePath,
     const std::string& originalEntryPath,
     const fs::path& workDir,
-    fs::path& extractedFile) {
+    fs::path& extractedFile,
+    uint64_t budget,
+    const AceLimits& limits) {
     std::error_code ec;
     fs::remove_all(workDir, ec);
     fs::create_directories(workDir, ec);
@@ -229,8 +331,10 @@ bool extractSingleEntry(
 
     ProcessResult result = runProcessCapture(
         unaceBinary,
-        {"e", "-y", "-f", "-c-", archivePath, targetDir, originalEntryPath});
+        {"e", "-y", "-f", "-c-", archivePath, targetDir, originalEntryPath},
+        {{"COMISCOPIO_UNACE_MAX_OUTPUT_BYTES", std::to_string(budget)}});
 
+    checkDecoderLimit(result, limits);
     if (result.exitCode != 0) {
         return false;
     }
@@ -244,9 +348,23 @@ bool extractSingleEntry(
     return true;
 }
 
+struct ExtractionCleanup {
+    fs::path temporary;
+    std::vector<fs::path> created;
+    bool keepOutputs = false;
+    ~ExtractionCleanup() {
+        std::error_code ec;
+        fs::remove_all(temporary, ec);
+        if (!keepOutputs) for (const auto& file : created) fs::remove(file, ec);
+    }
+};
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
+#ifdef __CYGWIN__
+    std::setlocale(LC_CTYPE, "C.UTF-8");
+#endif
     signal(SIGINT, signalHandler);
     signal(SIGTERM, signalHandler);
 
@@ -257,6 +375,12 @@ int main(int argc, char* argv[]) {
     }
 
     try {
+        const AceLimits limits;
+        args.input = decoderPath(args.input);
+        args.output = decoderPath(args.output);
+        if (args.input.size() >= 320 || args.output.size() + 32 >= 320) {
+            throw std::runtime_error("La ruta es demasiado larga para el decodificador ACE");
+        }
         const fs::path rawDir(args.output);
         const fs::path tempRoot = rawDir.parent_path() / ".ace-work";
         const fs::path unaceBinary = findBundledUnaceBinary();
@@ -268,14 +392,17 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
+        if (!fs::is_empty(rawDir)) throw std::runtime_error("El directorio raw para ACE debe estar vacio");
+
         fs::remove_all(tempRoot, ec);
         fs::create_directories(tempRoot, ec);
         if (ec) {
             emitError("No se pudo crear el directorio temporal de trabajo ACE");
             return 1;
         }
+        ExtractionCleanup cleanup{tempRoot, {}, false};
 
-        std::vector<ListedEntry> entries = listArchiveEntries(unaceBinary, args.input);
+        std::vector<ListedEntry> entries = listArchiveEntries(unaceBinary, args.input, limits);
         if (entries.empty()) {
             emitError("El archivo ACE no contiene imagenes reconocidas");
             fs::remove_all(tempRoot, ec);
@@ -288,6 +415,7 @@ int main(int argc, char* argv[]) {
         });
 
         int failedCount = 0;
+        uint64_t totalWritten = 0;
         for (std::size_t i = 0; i < entries.size(); i++) {
             if (cancelled) {
                 fs::remove_all(tempRoot, ec);
@@ -306,12 +434,18 @@ int main(int argc, char* argv[]) {
             fs::path extractedFile;
             std::string rawFile;
 
-            if (extractSingleEntry(unaceBinary, args.input, entry.originalPath, workDir, extractedFile)) {
+            const auto budget = std::min({entry.bytes, limits.entryBytes, limits.totalBytes - totalWritten});
+            if (extractSingleEntry(unaceBinary, args.input, entry.originalPath, workDir, extractedFile, budget, limits)) {
+                const auto actualBytes = fs::file_size(extractedFile);
+                if (actualBytes > budget) throw std::runtime_error("ACE supera el presupuesto de escritura");
+                if (actualBytes != entry.bytes) throw std::runtime_error("ACE contiene un tamano extraido distinto del declarado");
+                totalWritten += actualBytes;
                 std::string ext = archiveExtension(entry.archivePath);
                 if (ext.empty()) ext = ".bin";
 
                 rawFile = formatIndex(static_cast<int>(i)) + ext;
                 const fs::path finalPath = rawDir / rawFile;
+                cleanup.created.push_back(finalPath);
 
                 std::error_code moveEc;
                 fs::rename(extractedFile, finalPath, moveEc);
@@ -344,6 +478,7 @@ int main(int argc, char* argv[]) {
             {"type", "done"},
             {"failed", failedCount},
         });
+        cleanup.keepOutputs = true;
         return 0;
     } catch (const std::exception& e) {
         emitError(e.what());
